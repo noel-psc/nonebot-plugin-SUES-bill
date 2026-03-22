@@ -1,7 +1,7 @@
 [project]
-name = "nonebot-plugin-SUES-bill"
+name = "nonebot-plugin-sues-bill"
 version = "0.1.0"
-description = "插件描述"
+description = "查询sues账单"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "noel-psc", email = "noel-psc@gmail.com" }]
@@ -12,12 +12,15 @@ dependencies = [
   "nonebot-plugin-localstore>=0.7.4,<1.0.0",  # 存储文件
   "nonebot-plugin-uninfo>=0.10.0,<1.0.0",     # 多平台用户信息获取
   "nonebot2>=2.4.3,<3.0.0",
+  "pillow>=12.1.1",
+  "pytesseract>=0.3.13",
+  "requests>=2.32.5",
 ]
 
 [project.urls]
-Homepage = "https://github.com/noel-psc/nonebot-plugin-SUES-bill"
-Issues = "https://github.com/noel-psc/nonebot-plugin-SUES-bill/issues"
-Repository = "https://github.com/noel-psc/nonebot-plugin-SUES-bill.git"
+Homepage = "https://github.com/noel-psc/nonebot-plugin-sues-bill"
+Issues = "https://github.com/noel-psc/nonebot-plugin-sues-bill/issues"
+Repository = "https://github.com/noel-psc/nonebot-plugin-sues-bill.git"
 
 [dependency-groups]
 dev = [
@@ -52,8 +55,8 @@ tag = true
 
 [[tool.bumpversion.files]]
 filename = "uv.lock"
-search = "name = \"nonebot-plugin-SUES-bill\"\nversion = \"{current_version}\""
-replace = "name = \"nonebot-plugin-SUES-bill\"\nversion = \"{new_version}\""
+search = "name = \"nonebot-plugin-sues-bill\"\nversion = \"{current_version}\""
+replace = "name = \"nonebot-plugin-sues-bill\"\nversion = \"{new_version}\""
 
 [tool.coverage.report]
 exclude_lines = [
@@ -64,7 +67,7 @@ exclude_lines = [
 ]
 
 [tool.nonebot]
-plugins = ["nonebot_plugin_SUES_bill"]
+plugins = ["nonebot_plugin_sues_bill"]
 
 [tool.poe.tasks]
 test = "pytest --cov=src --cov-report xml --junitxml=./junit.xml -n auto"
