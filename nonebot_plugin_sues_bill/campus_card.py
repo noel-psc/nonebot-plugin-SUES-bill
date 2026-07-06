@@ -123,6 +123,8 @@ def query_balance(session: requests.Session) -> dict:
     """查询校园卡余额"""
     try:
         resp = session.get(INDEX_URL)
+        logger.info(f"查询余额: url={resp.url}, status={resp.status_code}")
+        logger.info(f"响应内容前500字: {resp.text[:500]}")
 
         # 提取账户余额
         balance_match = re.search(r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
