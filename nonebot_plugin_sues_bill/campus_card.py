@@ -2,11 +2,14 @@
 
 import re
 import json
+import base64
 
 import ddddocr
 import requests
 from nonebot import logger, on_command
+from Crypto.Cipher import PKCS1_v1_5
 from nonebot.params import CommandArg
+from Crypto.PublicKey import RSA
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
 
@@ -43,6 +46,16 @@ def recognize_captcha(image_content: bytes) -> str | None:
     except Exception as e:
         logger.error(f"验证码识别失败: {e}")
         return None
+
+
+def rsa_encrypt(password: str, modulus_hex: str, exponent_hex: str) -> str:
+    """RSA 加密密码"""
+    modulus = int(modulus_hex, 16)
+    exponent = int(exponent_hex, 16)
+    pub_key = RSA.construct((modulus, exponent))
+    cipher = PKCS1_v1_5.new(pub_key)
+    encrypted = cipher.encrypt(password.encode())
+    return base64.b64encode(encrypted).decode()
 
 
 def login(session: requests.Session, username: str, password: str) -> bool:
@@ -94,9 +107,22 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         )
         form_data = dict(input_matches)
 
-        # 添加登录字段（密码不加密，直接明文）
+        # 提取 RSA 加密参数
+        modulus_match = re.search(r'id="hid_modulus"[^>]+value="([^"]+)"', resp.text)
+        exponent_match = re.search(r'id="hid_exponent"[^>]+value="([^"]+)"', resp.text)
+
+        # 加密密码
+        if modulus_match and exponent_match:
+            encrypted_pwd = rsa_encrypt(
+                password, modulus_match.group(1), exponent_match.group(1)
+            )
+            form_data["j_password"] = encrypted_pwd
+            logger.info("使用 RSA 加密密码")
+        else:
+            form_data["j_password"] = password
+            logger.info("未找到 RSA 参数，使用明文密码")
+
         form_data["j_username"] = username
-        form_data["j_password"] = password
         if captcha:
             form_data["imageCodeName"] = captcha
 
@@ -107,15 +133,20 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
         login_resp = session.post(form_action, data=form_data, headers=headers)
         logger.info(f"登录响应: status={login_resp.status_code}, url={login_resp.url}")
-        logger.info(f"登录响应全文:\n{login_resp.text}")
         logger.info(f"登录后cookies: {dict(session.cookies)}")
 
-        # 检查是否被锁定
-        if "锁定" in login_resp.text or "锁定" in login_resp.text:
+        # 检查是否登录成功（响应不包含登录页重定向）
+        if "window.location" in login_resp.text and "person/index" in login_resp.text:
+            logger.warning("登录失败：被重定向回登录页")
+            return False
+        if "锁定" in login_resp.text:
             logger.warning("账号已被锁定")
             return False
-        if "错误" in login_resp.text or "失败" in login_resp.text:
-            logger.warning("登录失败")
+        if "errinfo" in login_resp.text:
+            # 提取错误信息
+            err_match = re.search(r"errinfo.*?>(.*?)<", login_resp.text)
+            if err_match:
+                logger.warning(f"登录错误: {err_match.group(1)}")
             return False
 
         # 尝试访问 H5
