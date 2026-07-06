@@ -34,6 +34,7 @@ electric_query = on_command("电费", priority=5, block=True)
 electric_set_global = on_command("设置全局电费账号", priority=5, block=True)
 electric_help = on_command("电费帮助", priority=5, block=True)
 electric_clear = on_command("清除电费设置", priority=5, block=True)
+electric_clear_global = on_command("清除全局电费设置", priority=5, block=True)
 
 
 # ─── 存储工具 ────────────────────────────────────────────────
@@ -415,3 +416,25 @@ async def handle_electric_clear(bot: Bot, event: Event, args: Message = CommandA
         await electric_clear.finish("已清除保存的查询参数")
     else:
         await electric_clear.finish("没有需要清除的设置")
+
+
+@electric_clear_global.handle()
+async def handle_clear_global(bot: Bot, event: Event, args: Message = CommandArg()):
+    """清除全局账号和cookie（仅管理员私聊）"""
+    if event.message_type != "private":
+        await electric_clear_global.finish("请私聊机器人操作")
+
+    user_id = str(event.get_user_id())
+    superusers = getattr(get_driver().config, "SUPERUSERS", None) or getattr(
+        get_driver().config, "superusers", set()
+    )
+    if user_id not in superusers:
+        await electric_clear_global.finish("仅管理员可操作")
+
+    # 删除全局账号和cookie文件
+    if GLOBAL_ACCOUNT_FILE.exists():
+        GLOBAL_ACCOUNT_FILE.unlink()
+    if GLOBAL_COOKIES_FILE.exists():
+        GLOBAL_COOKIES_FILE.unlink()
+
+    await electric_clear_global.finish("已清除全局账号和cookie缓存")
