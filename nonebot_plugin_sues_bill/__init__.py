@@ -31,6 +31,7 @@ HOME_PATH = "/"
 # 数据存储目录
 DATA_DIR = Path.home() / ".cache" / "nonebot-plugin-sues-bill"
 GLOBAL_ACCOUNT_FILE = DATA_DIR / "global_account.json"
+GLOBAL_COOKIES_FILE = DATA_DIR / "global_cookies.json"
 
 # 创建命令
 electric_query = on_command("电费", priority=5, block=True)
@@ -67,6 +68,25 @@ def save_global_account(username: str, password: str):
     _ensure_data_dir()
     with open(GLOBAL_ACCOUNT_FILE, "w", encoding="utf-8") as f:
         json.dump({"username": username, "password": password}, f, indent=2)
+
+
+def load_global_cookies() -> dict:
+    """加载全局cookie"""
+    _ensure_data_dir()
+    if GLOBAL_COOKIES_FILE.exists():
+        try:
+            with open(GLOBAL_COOKIES_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_global_cookies(cookies: dict):
+    """保存全局cookie"""
+    _ensure_data_dir()
+    with open(GLOBAL_COOKIES_FILE, "w", encoding="utf-8") as f:
+        json.dump(cookies, f, indent=2)
 
 
 def load_user_data(user_id: str) -> dict:
@@ -329,14 +349,15 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
         buildid=query_params["buildid"],
         username=global_account["username"],
         password=global_account["password"],
-        saved_cookies=data.get("cookies"),
+        saved_cookies=load_global_cookies(),
     )
 
     if result.get("retcode") == 0:
         data["query_params"] = query_params
-        if result.get("cookies"):
-            data["cookies"] = result["cookies"]
         save_user_data(str(user_id), data)
+        # 保存全局cookie
+        if result.get("cookies"):
+            save_global_cookies(result["cookies"])
 
         room = query_params["roomid"]
         degree = result["restElecDegree"]
