@@ -154,7 +154,7 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
         data["query_params"] = query_params
         save_user_data(str(user_id), data)
         await electric_query.finish(
-            f"{query_params['roomid']} 剩余电量: {result['restElecDegree']} 度"
+            f"剩余电量: {result['restElecDegree']} 度"
         )
     else:
         await electric_query.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
@@ -170,7 +170,7 @@ async def handle_electric_raw(bot: Bot, event: Event, args: Message = CommandArg
         await electric_raw.finish("需要4个参数：sysid roomid areaid buildid")
     result = query_electric_bill(*parts[:4])
     if result.get("retcode") == 0:
-        await electric_raw.finish(f"{parts[1]} 剩余电量: {result['restElecDegree']} 度")
+        await electric_raw.finish(f"剩余电量: {result['restElecDegree']} 度")
     await electric_raw.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
 
 
