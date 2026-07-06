@@ -6,11 +6,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "noel-psc", email = "noel-psc@gmail.com" }]
 dependencies = [
-  "httpx>=0.27.0,<1.0.0",
-  "nonebot-plugin-alconna>=0.60.0,<1.0.0",    # 跨平台命令解析拓展
-  "nonebot-plugin-apscheduler>=0.5.0,<1.0.0", # 定时任务
-  "nonebot-plugin-localstore>=0.7.4,<1.0.0",  # 存储文件
-  "nonebot-plugin-uninfo>=0.10.0,<1.0.0",     # 多平台用户信息获取
   "nonebot2>=2.4.3,<3.0.0",
   "pillow>=12.1.1",
   "pytesseract>=0.3.13",
@@ -41,14 +36,14 @@ test = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.10.0,<0.11.0"]
-build-backend = "uv_build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.uv.sources]
 nonebug = { git = "https://github.com/nonebot/nonebug" }
 
 [tool.bumpversion]
-current_version = "0.1.0"
+current_version = "0.1.1"
 commit = true
 message = "release: bump vesion from {current_version} to {new_version}"
 tag = true
@@ -70,7 +65,7 @@ exclude_lines = [
 plugins = ["nonebot_plugin_sues_bill"]
 
 [tool.poe.tasks]
-test = "pytest --cov=src --cov-report xml --junitxml=./junit.xml -n auto"
+test = "pytest --cov=nonebot_plugin_sues_bill --cov-report xml --junitxml=./junit.xml -n auto"
 bump = "bump-my-version bump"
 show-bump = "bump-my-version show-bump"
 
@@ -80,9 +75,9 @@ pythonPlatform = "All"
 defineConstant = { PYDANTIC_V2 = true }
 executionEnvironments = [
   { root = "./tests", extraPaths = [
-    "./src",
+    ".",
   ] },
-  { root = "./src" },
+  { root = "." },
 ]
 typeCheckingMode = "standard"
 disableBytesTypePromotions = true
@@ -96,7 +91,7 @@ addopts = [
   "-s",                    # 显示打印信息
   "-v",                    # 详细输出
 ]
-pythonpath = ["src"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 
