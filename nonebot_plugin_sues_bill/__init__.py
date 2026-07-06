@@ -27,6 +27,7 @@ HOME_PATH = "/"
 # 文件路径（使用 localstore）
 GLOBAL_ACCOUNT_FILE = get_plugin_data_file("global_account.json")
 GLOBAL_COOKIES_FILE = get_plugin_data_file("global_cookies.json")
+logger.info(f"电费插件数据目录: {GLOBAL_ACCOUNT_FILE.parent}")
 
 # 创建命令
 electric_query = on_command("电费", priority=5, block=True)
@@ -300,6 +301,11 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
 
     # 获取全局账号
     global_account = load_global_account()
+    logger.debug(f"全局账号文件: {GLOBAL_ACCOUNT_FILE}")
+    logger.debug(f"全局账号内容: {global_account}")
+    cookies = load_global_cookies()
+    logger.debug(f"全局cookie文件: {GLOBAL_COOKIES_FILE}")
+    logger.debug(f"全局cookie内容: {cookies}")
     if not global_account:
         await electric_query.finish(
             "全局账号未设置，请联系管理员使用【设置全局电费账号】命令"
