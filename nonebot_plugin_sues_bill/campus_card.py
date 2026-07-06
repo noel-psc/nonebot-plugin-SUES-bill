@@ -64,43 +64,56 @@ def recognize_captcha(image_content: bytes) -> str | None:
 def login(session: requests.Session, username: str, password: str) -> bool:
     """登录校园卡系统"""
     try:
-        # 获取登录页和 CSRF token
-        resp = session.get(f"{BASE_URL}/epay/person/index")
+        # 获取登录页
+        login_page_url = f"{BASE_URL}/epay/person/index"
+        resp = session.get(login_page_url)
+
+        # 提取 CSRF token
         csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"', resp.text)
         csrf_token = csrf_match.group(1) if csrf_match else ""
 
-        # 获取验证码
-        captcha_resp = session.get(CAPTCHA_URL)
-        captcha = recognize_captcha(captcha_resp.content)
-        if not captcha:
-            logger.warning("验证码识别失败")
+        # 提取验证码图片 URL 并识别
+        captcha_match = re.search(r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text)
+        captcha = None
+        if captcha_match:
+            captcha_url = captcha_match.group(1)
+            if not captcha_url.startswith("http"):
+                captcha_url = BASE_URL + captcha_url
+            captcha_resp = session.get(captcha_url)
+            captcha = recognize_captcha(captcha_resp.content)
+
+        # 提取表单 action
+        form_match = re.search(r'<form[^>]+action="([^"]+)"', resp.text)
+        if not form_match:
+            logger.warning("未找到登录表单")
             return False
+        form_action = form_match.group(1)
+        if form_action.startswith("/"):
+            form_action = BASE_URL + form_action
 
-        # 加密密码
-        encrypted_pwd = encrypt_password(password)
-
-        # 提取隐藏字段
-        form_data = {
-            "_csrf": csrf_token,
-            "j_username": username,
-            "j_password": encrypted_pwd,
-            "imageCodeName": captcha,
-        }
-
-        # 登录
-        login_resp = session.post(
-            LOGIN_URL,
-            data=form_data,
-            headers={"X-CSRF-TOKEN": csrf_token},
-            allow_redirects=True,
+        # 提取所有隐藏字段
+        input_matches = re.findall(
+            r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"', resp.text
         )
+        form_data = dict(input_matches)
 
-        # 检查是否登录成功（跳转到首页）
-        if "/epay/h5/index" in login_resp.url or "/epay/" in login_resp.url:
-            # 验证：访问首页看是否有余额
-            check_resp = session.get(INDEX_URL)
-            if "账户余额" in check_resp.text:
-                return True
+        # 添加登录字段
+        form_data["j_username"] = username
+        form_data["j_password"] = encrypt_password(password)
+        if captcha:
+            form_data["imageCodeName"] = captcha
+
+        # 提交登录
+        headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
+        login_resp = session.post(form_action, data=form_data, headers=headers)
+
+        # 访问首页建立会话
+        session.get(f"{BASE_URL}/")
+
+        # 验证登录
+        check_resp = session.get(INDEX_URL)
+        if "账户余额" in check_resp.text:
+            return True
 
         logger.warning(f"登录失败, resp URL: {login_resp.url}")
         return False
