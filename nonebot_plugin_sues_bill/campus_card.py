@@ -82,8 +82,10 @@ def login(session: requests.Session, username: str, password: str) -> bool:
             captcha_resp = session.get(captcha_url)
             captcha = recognize_captcha(captcha_resp.content)
 
-        # 提取表单 action
-        form_match = re.search(r'<form[^>]+action="([^"]+)"', resp.text)
+        # 提取登录表单 action（包含 j_username 的表单）
+        form_match = re.search(
+            r'<form[^>]*action="([^"]+)"[^>]*>.*?j_username', resp.text, re.DOTALL
+        )
         if not form_match:
             logger.warning("未找到登录表单")
             return False
