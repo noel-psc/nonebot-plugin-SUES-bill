@@ -124,7 +124,15 @@ def query_balance(session: requests.Session) -> dict:
     try:
         resp = session.get(INDEX_URL)
         logger.info(f"查询余额: url={resp.url}, status={resp.status_code}")
-        logger.info(f"响应内容前500字: {resp.text[:500]}")
+
+        # 检查响应内容
+        if "账户余额" in resp.text:
+            logger.info("找到'账户余额'")
+        else:
+            logger.info("未找到'账户余额'")
+            logger.info(f"响应长度: {len(resp.text)}")
+            if "登录" in resp.text:
+                logger.info("响应包含'登录'，可能未登录")
 
         # 提取账户余额
         balance_match = re.search(r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
