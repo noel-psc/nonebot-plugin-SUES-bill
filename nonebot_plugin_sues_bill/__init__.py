@@ -30,14 +30,6 @@ HOME_PATH = "/"
 # 用户数据存储目录
 DATA_DIR = Path.home() / ".cache" / "nonebot-plugin-sues-bill"
 
-# 默认查询参数
-DEFAULT_QUERY_PARAMS = {
-    "sysid": "4",
-    "roomid": "4021",
-    "areaid": "101",
-    "buildid": "13",
-}
-
 # 创建命令
 electric_query = on_command("电费", priority=5, block=True)
 electric_set_user = on_command("设置电费账号", priority=5, block=True)
@@ -297,8 +289,13 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
                 "或直接使用【#电费】使用上次保存的参数"
             )
     else:
-        # 无参数，使用上次保存的参数或默认值
-        query_params = data.get("query_params", DEFAULT_QUERY_PARAMS)
+        # 无参数，使用上次保存的参数
+        if "query_params" not in data:
+            await electric_query.finish(
+                "请提供查询参数，格式：#电费 [系统ID] [房间号] [区域ID] [楼栋ID]\n"
+                "输入【#电费帮助】查看参数说明"
+            )
+        query_params = data["query_params"]
 
     # 查询电费
     result = query_electric_bill(
