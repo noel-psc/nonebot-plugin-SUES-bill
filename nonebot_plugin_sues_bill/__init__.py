@@ -144,11 +144,25 @@ def login(session, username, password):
             login_response = session.post(form_action, data=form_data, headers=headers)
 
             # 检查是否登录成功
-            if "登录" not in login_response.text and "错误" not in login_response.text:
-                # 访问主页以建立会话
-                home_url = BASE_URL + HOME_PATH
-                session.get(home_url)
+            # 1. 响应URL不包含登录页路径（登录成功会跳转）
+            # 2. 响应中不含错误关键词
+            # 3. session中有cookie被设置
+            login_url_lower = LOGIN_PATH.lower()
+            resp_url = login_response.url.lower()
+            has_error = (
+                "错误" in login_response.text
+                or "登录失败" in login_response.text
+            )
+            on_login_page = login_url_lower in resp_url
+            has_cookies = bool(session.cookies.get_dict())
+
+            if not has_error and (not on_login_page or has_cookies):
                 return True
+            else:
+                logger.warning(
+                    f"登录失败: has_error={has_error}, "
+                    f"on_login_page={on_login_page}, has_cookies={has_cookies}"
+                )
         return False
     except Exception as e:
         logger.error(f"登录失败: {e}")
