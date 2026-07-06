@@ -1,13 +1,11 @@
 """校园卡余额查询模块"""
 
-import io
 import re
 import json
 import base64
 
+import ddddocr
 import requests
-import pytesseract
-from PIL import Image
 from nonebot import logger, on_command
 from Crypto.Cipher import DES
 from nonebot.params import CommandArg
@@ -53,16 +51,11 @@ def encrypt_password(password: str) -> str:
 
 
 def recognize_captcha(image_content: bytes) -> str | None:
-    """OCR 识别验证码"""
+    """识别验证码"""
     try:
-        img = Image.open(io.BytesIO(image_content))
-        img = img.convert("L")
-        img = img.point(lambda x: 0 if x < 128 else 255, "1")
-        captcha = pytesseract.image_to_string(
-            img, config="--psm 7 -c tessedit_char_whitelist=0123456789"
-        )
-        captcha = captcha.strip()
-        return captcha if captcha else None
+        ocr = ddddocr.DdddOcr(show_ad=False)
+        result = ocr.classification(image_content)
+        return result if result else None
     except Exception as e:
         logger.error(f"验证码识别失败: {e}")
         return None
