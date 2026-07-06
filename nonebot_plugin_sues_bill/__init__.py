@@ -176,6 +176,15 @@ def login(session, username, password):
             on_login_page = login_url_lower in resp_url
             has_cookies = bool(session.cookies.get_dict())
 
+            logger.info(
+                f"登录验证: resp_url={login_response.url}, "
+                f"has_error={has_error}, "
+                f"on_login_page={on_login_page}, "
+                f"has_cookies={has_cookies}, "
+                f"status_code={login_response.status_code}"
+            )
+            logger.info(f"登录响应前500字: {login_response.text[:500]}")
+
             if not has_error and (not on_login_page or has_cookies):
                 return True
             else:
