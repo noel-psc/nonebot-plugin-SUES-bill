@@ -25,8 +25,8 @@ QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"
 HOME_PATH = "/"
 
 # 文件路径（使用 localstore）
-GLOBAL_ACCOUNT_FILE = get_plugin_data_file("global_account", "json")
-GLOBAL_COOKIES_FILE = get_plugin_data_file("global_cookies", "json")
+GLOBAL_ACCOUNT_FILE = get_plugin_data_file("global_account.json")
+GLOBAL_COOKIES_FILE = get_plugin_data_file("global_cookies.json")
 
 # 创建命令
 electric_query = on_command("电费", priority=5, block=True)
@@ -40,7 +40,7 @@ electric_clear_global = on_command("清除全局电费设置", priority=5, block
 
 
 def _get_user_file(user_id: str):
-    return get_plugin_data_file(f"user_{user_id}", "json")
+    return get_plugin_data_file(f"user_{user_id}.json")
 
 
 def load_global_account() -> dict:
