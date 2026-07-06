@@ -170,36 +170,36 @@ def login(session, username, password):
 
             login_url_lower = LOGIN_PATH.lower()
             resp_url = login_response.url.lower()
-            resp_text = login_response.text.lower()
             has_error = (
                 "错误" in login_response.text or "登录失败" in login_response.text
             )
             on_login_page = login_url_lower in resp_url
-            # 检查响应内容是否包含登录页面特征
-            is_login_page = (
-                "checklogin" in resp_text
-                or "login.css" in resp_text
-                or "j_username" in resp_text
-            )
             has_cookies = bool(session.cookies.get_dict())
 
             logger.info(
                 f"登录验证: resp_url={login_response.url}, "
                 f"has_error={has_error}, "
                 f"on_login_page={on_login_page}, "
-                f"is_login_page={is_login_page}, "
                 f"has_cookies={has_cookies}, "
                 f"status_code={login_response.status_code}"
             )
+            # 记录响应内容的关键特征
+            resp_lower = login_response.text.lower()
+            has_logout = "退出" in login_response.text or "logout" in resp_lower
+            has_welcome = "欢迎" in login_response.text or "welcome" in resp_lower
+            logger.info(
+                f"响应特征: has_checklogin={'checklogin' in resp_lower}, "
+                f"has_login_css={'login.css' in resp_lower}, "
+                f"has_j_username={'j_username' in resp_lower}, "
+                f"has_logout={has_logout}, has_welcome={has_welcome}"
+            )
 
-            # 登录成功：没有错误 且 不在登录页面
-            if not has_error and not on_login_page and not is_login_page:
+            if not has_error and not on_login_page:
                 return True
             else:
                 logger.warning(
                     f"登录失败: has_error={has_error}, "
                     f"on_login_page={on_login_page}, "
-                    f"is_login_page={is_login_page}, "
                     f"has_cookies={has_cookies}"
                 )
         return False
