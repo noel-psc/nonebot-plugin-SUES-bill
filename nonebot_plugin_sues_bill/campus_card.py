@@ -120,29 +120,16 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
         login_resp = session.post(form_action, data=form_data, headers=headers)
         logger.info(f"登录响应: status={login_resp.status_code}, url={login_resp.url}")
-        logger.info(f"登录后cookies: {dict(session.cookies)}")
-
-        # 检查是否登录成功（响应不包含登录页重定向）
-        if "window.location" in login_resp.text and "person/index" in login_resp.text:
-            logger.warning("登录失败：被重定向回登录页")
-            return False
-        if "锁定" in login_resp.text:
-            logger.warning("账号已被锁定")
-            return False
-        if "errinfo" in login_resp.text:
-            # 提取错误信息
-            err_match = re.search(r"errinfo.*?>(.*?)<", login_resp.text)
-            if err_match:
-                logger.warning(f"登录错误: {err_match.group(1)}")
-            return False
+        logger.info(f"登录响应内容:\n{login_resp.text[:2000]}")
 
         # 尝试访问 H5
         h5_resp = session.get(INDEX_URL)
         logger.info(f"H5: url={h5_resp.url}, len={len(h5_resp.text)}")
         if "账户余额" in h5_resp.text:
             return True
+        if "登录已过期" in h5_resp.text:
+            logger.info("H5显示登录已过期")
 
-        return False
         return False
     except Exception as e:
         logger.error(f"登录异常: {e}")
