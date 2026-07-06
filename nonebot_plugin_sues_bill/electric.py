@@ -72,6 +72,7 @@ def _do_query_electric_bill(sysid, roomid, areaid, buildid):
             headers=headers,
             timeout=REQUEST_TIMEOUT,
         )
+        resp.raise_for_status()
         match = re.search(r"(\d+\.?\d*)\s*度", resp.text)
         if match:
             return {"retcode": 0, "restElecDegree": float(match.group(1))}
@@ -137,8 +138,10 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
 
     result = await query_electric_bill(**query_params)
     if result.get("retcode") == 0:
-        data["query_params"] = query_params
-        save_user_data(str(user_id), data)
+        # 仅在参数变化时保存
+        if data.get("query_params") != query_params:
+            data["query_params"] = query_params
+            save_user_data(str(user_id), data)
         await electric_query.finish(f"剩余电量: {result['restElecDegree']} 度")
     else:
         await electric_query.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
@@ -223,8 +226,5 @@ async def handle_electric_clear(bot: Bot, event: Event, args: Message = CommandA
     from .models import get_user_file
 
     user_file = get_user_file(str(user_id))
-    if user_file.exists():
-        user_file.unlink()
-        await electric_clear.finish("已清除保存的查询参数")
-    else:
-        await electric_clear.finish("没有需要清除的设置")
+    user_file.unlink(missing_ok=True)
+    await electric_clear.finish("已清除保存的查询参数")

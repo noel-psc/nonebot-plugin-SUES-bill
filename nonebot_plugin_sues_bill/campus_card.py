@@ -143,6 +143,7 @@ def _do_login(username: str, password: str) -> bool:
         resp = session.get(
             f"{BASE_URL}/epay/person/index", timeout=REQUEST_TIMEOUT
         )
+        resp.raise_for_status()
 
         # 提取 CSRF token
         csrf_match = re.search(
@@ -199,6 +200,7 @@ def _do_login(username: str, password: str) -> bool:
 
         # 验证：访问 H5 首页检查是否显示余额
         h5_resp = session.get(INDEX_URL, timeout=REQUEST_TIMEOUT)
+        h5_resp.raise_for_status()
         return "账户余额" in h5_resp.text
     except requests.Timeout:
         logger.error("登录超时")
