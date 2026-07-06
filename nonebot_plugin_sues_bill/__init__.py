@@ -265,7 +265,9 @@ async def handle_set_global(bot: Bot, event: Event, args: Message = CommandArg()
 
     # 检查是否超级管理员
     user_id = str(event.get_user_id())
-    superusers = get_driver().config.SUPERUSERS
+    superusers = getattr(get_driver().config, "SUPERUSERS", None) or getattr(
+        get_driver().config, "superusers", set()
+    )
     if user_id not in superusers:
         await electric_set_global.finish("仅管理员可设置全局账号")
 
