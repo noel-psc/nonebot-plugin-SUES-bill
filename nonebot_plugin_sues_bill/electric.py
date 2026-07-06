@@ -6,10 +6,8 @@ from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
 
+from .config import BASE_URL, USER_AGENT, ELECTRIC_QUERY_PATH
 from .models import load_user_data, save_user_data
-
-BASE_URL = "https://epay.sues.edu.cn"
-QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"
 
 AREA_MAP = {
     "三期": ("4", "101"),
@@ -54,22 +52,19 @@ BUILD_MAP = {
 
 
 def query_electric_bill(sysid="4", roomid="4021", areaid="101", buildid="13"):
+    """查询宿舍电费信息"""
     try:
         session = requests.Session()
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0"
-            )
-        }
+        headers = {"User-Agent": USER_AGENT}
         params = {
             "sysid": sysid,
             "roomid": roomid,
             "areaid": areaid,
             "buildid": buildid,
         }
-        resp = session.get(BASE_URL + QUERY_PATH, params=params, headers=headers)
+        resp = session.get(
+            BASE_URL + ELECTRIC_QUERY_PATH, params=params, headers=headers
+        )
         match = re.search(r"(\d+\.?\d*)\s*度", resp.text)
         if match:
             return {"retcode": 0, "restElecDegree": float(match.group(1))}
@@ -147,7 +142,7 @@ async def handle_electric_raw(bot: Bot, event: Event, args: Message = CommandArg
 async def handle_electric_help(bot: Bot, event: Event, args: Message = CommandArg()):
     await electric_help.finish(
         "💡 电费查询帮助\n"
-        "━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━\n\n"
         "【使用方式】\n"
         "#电费 区域 楼栋 房间号\n"
         "#电费（使用上次保存的参数）\n"
@@ -168,7 +163,7 @@ async def handle_electric_help_detail(
 ):
     await electric_help_detail.finish(
         "📖 电费原始查询帮助\n"
-        "━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━\n\n"
         "格式：#电费原始 系统ID 房间号 区域ID 楼栋ID\n"
         "例：#电费原始 4 4021 101 13\n\n"
         "【系统ID】\n"
