@@ -107,15 +107,16 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         )
         form_data = dict(input_matches)
 
-        # 提取 RSA 加密参数
-        modulus_match = re.search(r'id="hid_modulus"[^>]+value="([^"]+)"', resp.text)
-        exponent_match = re.search(r'id="hid_exponent"[^>]+value="([^"]+)"', resp.text)
+        # 提取 RSA 加密参数（从 JavaScript 中提取）
+        rsa_match = re.search(
+            r'RSAKeyPair\("([^"]+)","([^"]*)","([^"]+)"\)', resp.text
+        )
 
         # 加密密码
-        if modulus_match and exponent_match:
-            encrypted_pwd = rsa_encrypt(
-                password, modulus_match.group(1), exponent_match.group(1)
-            )
+        if rsa_match:
+            exponent = rsa_match.group(1)
+            modulus = rsa_match.group(3)
+            encrypted_pwd = rsa_encrypt(password, modulus, exponent)
             form_data["j_password"] = encrypted_pwd
             logger.info("使用 RSA 加密密码")
         else:
