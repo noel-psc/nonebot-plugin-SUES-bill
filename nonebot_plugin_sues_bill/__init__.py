@@ -1,7 +1,6 @@
 import io
 import re
 import json
-from pathlib import Path
 
 import requests
 from PIL import Image
@@ -10,6 +9,7 @@ from pytesseract import image_to_string
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot.adapters import Message
+from nonebot_plugin_localstore import get_plugin_data_file
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 __plugin_meta__ = PluginMetadata(
@@ -24,10 +24,9 @@ LOGIN_PATH = "/epay/person/index"
 QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"
 HOME_PATH = "/"
 
-# 数据存储目录
-DATA_DIR = Path.home() / ".cache" / "nonebot-plugin-sues-bill"
-GLOBAL_ACCOUNT_FILE = DATA_DIR / "global_account.json"
-GLOBAL_COOKIES_FILE = DATA_DIR / "global_cookies.json"
+# 文件路径（使用 localstore）
+GLOBAL_ACCOUNT_FILE = get_plugin_data_file("global_account", "json")
+GLOBAL_COOKIES_FILE = get_plugin_data_file("global_cookies", "json")
 
 # 创建命令
 electric_query = on_command("电费", priority=5, block=True)
@@ -40,17 +39,12 @@ electric_clear_global = on_command("清除全局电费设置", priority=5, block
 # ─── 存储工具 ────────────────────────────────────────────────
 
 
-def _ensure_data_dir():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _get_user_file(user_id: str) -> Path:
-    return DATA_DIR / f"{user_id}.json"
+def _get_user_file(user_id: str):
+    return get_plugin_data_file(f"user_{user_id}", "json")
 
 
 def load_global_account() -> dict:
     """加载全局账号"""
-    _ensure_data_dir()
     if GLOBAL_ACCOUNT_FILE.exists():
         try:
             with open(GLOBAL_ACCOUNT_FILE, encoding="utf-8") as f:
@@ -62,14 +56,12 @@ def load_global_account() -> dict:
 
 def save_global_account(username: str, password: str):
     """保存全局账号"""
-    _ensure_data_dir()
     with open(GLOBAL_ACCOUNT_FILE, "w", encoding="utf-8") as f:
         json.dump({"username": username, "password": password}, f, indent=2)
 
 
 def load_global_cookies() -> dict:
     """加载全局cookie"""
-    _ensure_data_dir()
     if GLOBAL_COOKIES_FILE.exists():
         try:
             with open(GLOBAL_COOKIES_FILE, encoding="utf-8") as f:
@@ -81,14 +73,12 @@ def load_global_cookies() -> dict:
 
 def save_global_cookies(cookies: dict):
     """保存全局cookie"""
-    _ensure_data_dir()
     with open(GLOBAL_COOKIES_FILE, "w", encoding="utf-8") as f:
         json.dump(cookies, f, indent=2)
 
 
 def load_user_data(user_id: str) -> dict:
     """加载用户数据（仅查询参数）"""
-    _ensure_data_dir()
     user_file = _get_user_file(user_id)
     if user_file.exists():
         try:
@@ -101,7 +91,6 @@ def load_user_data(user_id: str) -> dict:
 
 def save_user_data(user_id: str, data: dict):
     """保存用户数据"""
-    _ensure_data_dir()
     user_file = _get_user_file(user_id)
     with open(user_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -297,6 +286,9 @@ async def handle_set_global(bot: Bot, event: Event, args: Message = CommandArg()
         await electric_set_global.finish("格式：设置全局电费账号 用户名 密码")
 
     save_global_account(parts[0], parts[1])
+    # 清除旧cookie，强制下次查询重新登录
+    if GLOBAL_COOKIES_FILE.exists():
+        GLOBAL_COOKIES_FILE.unlink()
     await electric_set_global.finish(f"全局账号设置成功！用户名: {parts[0]}")
 
 
