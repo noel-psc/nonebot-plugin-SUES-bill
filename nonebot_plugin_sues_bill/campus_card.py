@@ -104,14 +104,19 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         form_data = dict(input_matches)
 
         # 添加登录字段
+        encrypted_pwd = encrypt_password(password)
         form_data["j_username"] = username
-        form_data["j_password"] = encrypt_password(password)
+        form_data["j_password"] = encrypted_pwd
         if captcha:
             form_data["imageCodeName"] = captcha
+
+        logger.info(f"登录表单: action={form_action}, fields={list(form_data.keys())}")
+        logger.info(f"验证码: {captcha}")
 
         # 提交登录
         headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
         login_resp = session.post(form_action, data=form_data, headers=headers)
+        logger.info(f"登录响应: status={login_resp.status_code}, url={login_resp.url}")
 
         # 访问首页建立会话
         session.get(f"{BASE_URL}/")
