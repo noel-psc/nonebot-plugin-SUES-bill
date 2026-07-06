@@ -205,11 +205,19 @@ def query_electric_bill(
     """查询宿舍电费信息"""
     try:
         session = requests.Session()
+        logger.info(
+            f"查询参数: has_cookies={bool(saved_cookies)}, "
+            f"username={username}"
+        )
 
         if saved_cookies:
+            logger.info("使用已保存的cookie")
             session.cookies.update(saved_cookies)
         elif username and password:
-            if not login(session, username, password):
+            logger.info(f"尝试登录: username={username}")
+            login_result = login(session, username, password)
+            logger.info(f"登录结果: {login_result}")
+            if not login_result:
                 return {
                     "retcode": -1,
                     "retmsg": "登录失败，请检查用户名、密码或验证码",
@@ -301,11 +309,11 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
 
     # 获取全局账号
     global_account = load_global_account()
-    logger.debug(f"全局账号文件: {GLOBAL_ACCOUNT_FILE}")
-    logger.debug(f"全局账号内容: {global_account}")
+    logger.info(f"全局账号文件: {GLOBAL_ACCOUNT_FILE}")
+    logger.info(f"全局账号内容: {global_account}")
     cookies = load_global_cookies()
-    logger.debug(f"全局cookie文件: {GLOBAL_COOKIES_FILE}")
-    logger.debug(f"全局cookie内容: {cookies}")
+    logger.info(f"全局cookie文件: {GLOBAL_COOKIES_FILE}")
+    logger.info(f"全局cookie内容: {cookies}")
     if not global_account:
         await electric_query.finish(
             "全局账号未设置，请联系管理员使用【设置全局电费账号】命令"
