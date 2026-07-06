@@ -42,7 +42,7 @@ build-backend = "hatchling.build"
 nonebug = { git = "https://github.com/nonebot/nonebug" }
 
 [tool.bumpversion]
-current_version = "0.1.2"
+current_version = "0.2.0"
 commit = true
 message = "release: bump vesion from {current_version} to {new_version}"
 tag = true
