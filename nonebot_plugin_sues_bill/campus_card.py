@@ -2,27 +2,18 @@
 
 import re
 import json
-import base64
 
 import ddddocr
 import requests
 from nonebot import logger, on_command
-from Crypto.Cipher import DES
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
-from Crypto.Util.Padding import pad
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .models import DATA_DIR
 
 BASE_URL = "https://epay.sues.edu.cn"
-LOGIN_URL = f"{BASE_URL}/epay/j_spring_security_check"
 INDEX_URL = f"{BASE_URL}/epay/h5/index"
-CAPTCHA_URL = f"{BASE_URL}/epay/codeimage"
-
-# DES 加密参数（从网页 JS 提取）
-DES_KEY = b"6eGicG6U"
-DES_IV = bytes([1, 2, 3, 4, 5, 6, 7, 8])
 
 # 校园卡账号存储文件
 ACCOUNT_FILE = DATA_DIR / "campus_card_account.json"
@@ -43,13 +34,6 @@ def save_account(username: str, password: str):
         json.dump({"username": username, "password": password}, f, indent=2)
 
 
-def encrypt_password(password: str) -> str:
-    """DES-CBC 加密密码"""
-    cipher = DES.new(DES_KEY, DES.MODE_CBC, DES_IV)
-    encrypted = cipher.encrypt(pad(password.encode(), DES.block_size))
-    return base64.b64encode(encrypted).decode()
-
-
 def recognize_captcha(image_content: bytes) -> str | None:
     """识别验证码"""
     try:
@@ -65,16 +49,15 @@ def login(session: requests.Session, username: str, password: str) -> bool:
     """登录校园卡系统"""
     try:
         # 获取登录页
-        login_page_url = f"{BASE_URL}/epay/person/index"
-        resp = session.get(login_page_url)
+        resp = session.get(f"{BASE_URL}/epay/person/index")
 
         # 提取 CSRF token
-        csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"', resp.text)
+        csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"/>', resp.text)
         csrf_token = csrf_match.group(1) if csrf_match else ""
 
-        # 提取验证码图片 URL 并识别（可能用单引号或双引号）
+        # 提取验证码图片 URL 并识别
         captcha_match = re.search(
-            r"""<img[^>]+src=(?:"|')([^"']*codeimage[^"']*)(?:"|')""", resp.text
+            r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text
         )
         captcha = None
         if captcha_match:
@@ -84,31 +67,26 @@ def login(session: requests.Session, username: str, password: str) -> bool:
             captcha_resp = session.get(captcha_url)
             captcha = recognize_captcha(captcha_resp.content)
 
-        # 提取登录表单 action（id="loginFr"）
-        form_match = re.search(
-            r'id="loginFr"[^>]*action="([^"]+)"', resp.text
-        )
-        if not form_match:
-            form_match = re.search(
-                r'action="([^"]+)"[^>]*id="loginFr"', resp.text
-            )
+        # 提取登录表单 action
+        form_match = re.search(r'<form[^>]+action="([^"]+)"', resp.text)
         if not form_match:
             logger.warning("未找到登录表单")
             return False
         form_action = form_match.group(1)
         if form_action.startswith("/"):
             form_action = BASE_URL + form_action
+        elif not form_action.startswith("http"):
+            form_action = BASE_URL + "/" + form_action
 
-        # 提取所有隐藏字段
+        # 提取所有输入字段
         input_matches = re.findall(
             r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"', resp.text
         )
         form_data = dict(input_matches)
 
-        # 添加登录字段
-        encrypted_pwd = encrypt_password(password)
+        # 添加登录字段（密码不加密，直接明文）
         form_data["j_username"] = username
-        form_data["j_password"] = encrypted_pwd
+        form_data["j_password"] = password
         if captcha:
             form_data["imageCodeName"] = captcha
 
@@ -120,12 +98,10 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         login_resp = session.post(form_action, data=form_data, headers=headers)
         logger.info(f"登录响应: status={login_resp.status_code}, url={login_resp.url}")
 
-        # 访问首页建立会话
-        session.get(f"{BASE_URL}/")
-
-        # 验证登录
-        check_resp = session.get(INDEX_URL)
-        if "账户余额" in check_resp.text:
+        # 检查是否登录成功
+        if "登录" not in login_resp.text and "错误" not in login_resp.text:
+            # 访问首页建立会话
+            session.get(f"{BASE_URL}/")
             return True
 
         logger.warning(f"登录失败, resp URL: {login_resp.url}")
