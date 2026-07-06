@@ -57,7 +57,8 @@ def login(session: requests.Session, username: str, password: str) -> bool:
 
         # 提取验证码图片 URL 并识别
         captcha_match = re.search(
-            r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text
+            r"""<img[^>]+src=(?:"|')([^"']*(?:codeimage|imageCode)[^"']*)(?:"|')""",
+            resp.text,
         )
         captcha = None
         if captcha_match:
@@ -67,12 +68,19 @@ def login(session: requests.Session, username: str, password: str) -> bool:
             captcha_resp = session.get(captcha_url)
             captcha = recognize_captcha(captcha_resp.content)
 
-        # 提取登录表单 action
-        form_match = re.search(r'<form[^>]+action="([^"]+)"', resp.text)
-        if not form_match:
+        # 提取登录表单 action（包含 j_username 的表单）
+        # 找到包含 j_username 的 form 区块
+        login_form_match = re.search(
+            r'<form[^>]*action="([^"]+)"[^>]*name="loginFr"', resp.text
+        )
+        if not login_form_match:
+            login_form_match = re.search(
+                r'<form[^>]*name="loginFr"[^>]*action="([^"]+)"', resp.text
+            )
+        if not login_form_match:
             logger.warning("未找到登录表单")
             return False
-        form_action = form_match.group(1)
+        form_action = login_form_match.group(1)
         if form_action.startswith("/"):
             form_action = BASE_URL + form_action
         elif not form_action.startswith("http"):
