@@ -5,7 +5,7 @@ from pathlib import Path
 
 import requests
 from PIL import Image
-from nonebot import logger, on_command
+from nonebot import logger, get_driver, on_command
 from pytesseract import image_to_string
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
@@ -17,7 +17,8 @@ __plugin_meta__ = PluginMetadata(
     description="电费查询插件",
     usage=(
         "电费 [系统ID] [房间号] [区域ID] [楼栋ID]\n"
-        "设置电费账号 用户名 密码\n电费帮助\n清除电费设置"
+        "电费帮助\n清除电费设置\n"
+        "(管理员私聊) 设置全局电费账号 用户名 密码"
     ),
 )
 
@@ -27,28 +28,49 @@ LOGIN_PATH = "/epay/person/index"
 QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"
 HOME_PATH = "/"
 
-# 用户数据存储目录
+# 数据存储目录
 DATA_DIR = Path.home() / ".cache" / "nonebot-plugin-sues-bill"
+GLOBAL_ACCOUNT_FILE = DATA_DIR / "global_account.json"
 
 # 创建命令
 electric_query = on_command("电费", priority=5, block=True)
-electric_set_user = on_command("设置电费账号", priority=5, block=True)
+electric_set_global = on_command("设置全局电费账号", priority=5, block=True)
 electric_help = on_command("电费帮助", priority=5, block=True)
 electric_clear = on_command("清除电费设置", priority=5, block=True)
 
 
+# ─── 存储工具 ────────────────────────────────────────────────
+
+
 def _ensure_data_dir():
-    """确保数据目录存在"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _get_user_file(user_id: str) -> Path:
-    """获取用户数据文件路径"""
     return DATA_DIR / f"{user_id}.json"
 
 
+def load_global_account() -> dict:
+    """加载全局账号"""
+    _ensure_data_dir()
+    if GLOBAL_ACCOUNT_FILE.exists():
+        try:
+            with open(GLOBAL_ACCOUNT_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_global_account(username: str, password: str):
+    """保存全局账号"""
+    _ensure_data_dir()
+    with open(GLOBAL_ACCOUNT_FILE, "w", encoding="utf-8") as f:
+        json.dump({"username": username, "password": password}, f, indent=2)
+
+
 def load_user_data(user_id: str) -> dict:
-    """加载单个用户数据"""
+    """加载用户数据（仅查询参数）"""
     _ensure_data_dir()
     user_file = _get_user_file(user_id)
     if user_file.exists():
@@ -61,11 +83,14 @@ def load_user_data(user_id: str) -> dict:
 
 
 def save_user_data(user_id: str, data: dict):
-    """保存单个用户数据"""
+    """保存用户数据"""
     _ensure_data_dir()
     user_file = _get_user_file(user_id)
     with open(user_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ─── 验证码 & 登录 ──────────────────────────────────────────
 
 
 def recognize_captcha(image_content):
@@ -90,14 +115,12 @@ def login(session, username, password):
         login_url = BASE_URL + LOGIN_PATH
         response = session.get(login_url)
 
-        # 提取CSRF Token
         csrf_token = None
         csrf_pattern = r'<meta name="_csrf" content="([^"]+)"/>'
         csrf_match = re.search(csrf_pattern, response.text)
         if csrf_match:
             csrf_token = csrf_match.group(1)
 
-        # 提取验证码图片URL
         captcha_pattern = r'<img[^>]+src="([^"]*imageCode[^"]*)"'
         captcha_match = re.search(captcha_pattern, response.text)
 
@@ -110,7 +133,6 @@ def login(session, username, password):
             captcha_response = session.get(captcha_url)
             captcha = recognize_captcha(captcha_response.content)
 
-        # 提取登录表单
         form_pattern = r'<form[^>]+action="([^"]+)"'
         form_match = re.search(form_pattern, response.text)
 
@@ -121,37 +143,28 @@ def login(session, username, password):
             elif not form_action.startswith("http"):
                 form_action = BASE_URL + "/" + form_action
 
-            # 提取所有输入字段
             input_pattern = r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"'
             input_matches = re.findall(input_pattern, response.text)
 
-            # 构建表单数据
             form_data = {}
             for name, value in input_matches:
                 form_data[name] = value
 
-            # 添加用户名、密码和验证码
             form_data["j_username"] = username
             form_data["j_password"] = password
             if captcha:
                 form_data["imageCodeName"] = captcha
 
-            # 提交表单
             headers = {}
             if csrf_token:
                 headers["X-CSRF-TOKEN"] = csrf_token
 
             login_response = session.post(form_action, data=form_data, headers=headers)
 
-            # 检查是否登录成功
-            # 1. 响应URL不包含登录页路径（登录成功会跳转）
-            # 2. 响应中不含错误关键词
-            # 3. session中有cookie被设置
             login_url_lower = LOGIN_PATH.lower()
             resp_url = login_response.url.lower()
             has_error = (
-                "错误" in login_response.text
-                or "登录失败" in login_response.text
+                "错误" in login_response.text or "登录失败" in login_response.text
             )
             on_login_page = login_url_lower in resp_url
             has_cookies = bool(session.cookies.get_dict())
@@ -161,12 +174,16 @@ def login(session, username, password):
             else:
                 logger.warning(
                     f"登录失败: has_error={has_error}, "
-                    f"on_login_page={on_login_page}, has_cookies={has_cookies}"
+                    f"on_login_page={on_login_page}, "
+                    f"has_cookies={has_cookies}"
                 )
         return False
     except Exception as e:
         logger.error(f"登录失败: {e}")
         return False
+
+
+# ─── 查询 ───────────────────────────────────────────────────
 
 
 def query_electric_bill(
@@ -182,24 +199,23 @@ def query_electric_bill(
     try:
         session = requests.Session()
 
-        # 加载已保存的cookie
         if saved_cookies:
             session.cookies.update(saved_cookies)
         elif username and password:
-            # 登录
             if not login(session, username, password):
-                return {"retcode": -1, "retmsg": "登录失败，请检查用户名、密码或验证码"}
+                return {
+                    "retcode": -1,
+                    "retmsg": "登录失败，请检查用户名、密码或验证码",
+                }
         else:
             return {
                 "retcode": -1,
-                "retmsg": '未设置账号信息，请先使用"设置电费账号"命令',
+                "retmsg": "未设置全局账号，请联系管理员",
             }
 
-        # 访问主页以建立会话
         home_url = BASE_URL + HOME_PATH
         session.get(home_url)
 
-        # 发送查询电费的请求
         query_url = BASE_URL + QUERY_PATH
 
         headers = {
@@ -219,13 +235,11 @@ def query_electric_bill(
 
         query_response = session.get(query_url, params=params, headers=headers)
 
-        # 从HTML中提取剩余电量
         pattern = r"(\d+\.?\d*)\s*度"
         match = re.search(pattern, query_response.text)
 
         if match:
             rest_degree = float(match.group(1))
-            # 登录成功，保存cookie
             new_cookies = session.cookies.get_dict()
             return {
                 "retcode": 0,
@@ -239,33 +253,32 @@ def query_electric_bill(
         return {"retcode": -1, "retmsg": f"错误: {e}"}
 
 
-@electric_set_user.handle()
-async def handle_set_user(bot: Bot, event: Event, args: Message = CommandArg()):
-    """处理设置电费账号命令"""
-    arg_text = args.extract_plain_text().strip()
+# ─── 处理器 ─────────────────────────────────────────────────
 
+
+@electric_set_global.handle()
+async def handle_set_global(bot: Bot, event: Event, args: Message = CommandArg()):
+    """设置全局电费账号（仅管理员私聊）"""
+    # 检查是否私聊
+    if event.message_type != "private":
+        await electric_set_global.finish("请私聊机器人设置全局账号")
+
+    # 检查是否超级管理员
+    user_id = str(event.get_user_id())
+    superusers = get_driver().config.SUPERUSERS
+    if user_id not in superusers:
+        await electric_set_global.finish("仅管理员可设置全局账号")
+
+    arg_text = args.extract_plain_text().strip()
     if not arg_text:
-        await electric_set_user.finish(
-            "请提供用户名和密码，格式：#设置电费账号 用户名 密码"
-        )
+        await electric_set_global.finish("格式：设置全局电费账号 用户名 密码")
 
     parts = arg_text.split()
     if len(parts) < 2:
-        await electric_set_user.finish("参数不足，格式：#设置电费账号 用户名 密码")
+        await electric_set_global.finish("格式：设置全局电费账号 用户名 密码")
 
-    username = parts[0]
-    password = parts[1]
-    user_id = event.get_user_id()
-
-    # 加载并更新用户数据
-    data = load_user_data(user_id)
-    data["username"] = username
-    data["password"] = password
-    save_user_data(user_id, data)
-
-    await electric_set_user.finish(
-        f"账号设置成功！\n用户名: {username}\n现在可以使用【#电费】命令查询电费了"
-    )
+    save_global_account(parts[0], parts[1])
+    await electric_set_global.finish(f"全局账号设置成功！用户名: {parts[0]}")
 
 
 @electric_query.handle()
@@ -274,21 +287,17 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
     user_id = event.get_user_id()
     data = load_user_data(user_id)
 
-    # 检查是否设置了账号
-    if "username" not in data or "password" not in data:
+    # 获取全局账号
+    global_account = load_global_account()
+    if not global_account:
         await electric_query.finish(
-            "您还未设置账号，请先使用【#设置电费账号】命令设置账号\n"
-            "格式：#设置电费账号 用户名 密码"
+            "全局账号未设置，请联系管理员使用【设置全局电费账号】命令"
         )
 
-    username = data["username"]
-    password = data["password"]
-
-    # 获取参数
+    # 获取查询参数
     arg_text = args.extract_plain_text().strip()
 
     if arg_text:
-        # 用户提供了参数，使用用户提供的
         parts = arg_text.split()
         if len(parts) >= 4:
             query_params = {
@@ -303,7 +312,6 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
                 "或直接使用【#电费】使用上次保存的参数"
             )
     else:
-        # 无参数，使用上次保存的参数
         if "query_params" not in data:
             await electric_query.finish(
                 "请提供查询参数，格式：#电费 [系统ID] [房间号] [区域ID] [楼栋ID]\n"
@@ -317,17 +325,16 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
         roomid=query_params["roomid"],
         areaid=query_params["areaid"],
         buildid=query_params["buildid"],
-        username=username,
-        password=password,
+        username=global_account["username"],
+        password=global_account["password"],
         saved_cookies=data.get("cookies"),
     )
 
     if result.get("retcode") == 0:
-        # 查询成功，保存本次使用的参数和 cookie
         data["query_params"] = query_params
         if result.get("cookies"):
             data["cookies"] = result["cookies"]
-        save_user_data(user_id, data)
+        save_user_data(str(user_id), data)
 
         room = query_params["roomid"]
         degree = result["restElecDegree"]
@@ -381,12 +388,12 @@ async def handle_electric_help(bot: Bot, event: Event, args: Message = CommandAr
 
 @electric_clear.handle()
 async def handle_electric_clear(bot: Bot, event: Event, args: Message = CommandArg()):
-    """清除保存的电费设置"""
+    """清除保存的查询参数"""
     user_id = event.get_user_id()
-    user_file = _get_user_file(user_id)
+    user_file = _get_user_file(str(user_id))
 
     if user_file.exists():
         user_file.unlink()
-        await electric_clear.finish("已清除所有保存的电费设置")
+        await electric_clear.finish("已清除保存的查询参数")
     else:
         await electric_clear.finish("没有需要清除的设置")
