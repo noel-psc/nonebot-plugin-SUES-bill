@@ -1,5 +1,5 @@
-from nonebot import logger, require
-from nonebot.plugin import PluginMetadata, inherit_supported_adapters
+from nonebot import get_plugin_config
+from nonebot.plugin import PluginMetadata
 from nonebot import on_command
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
@@ -12,48 +12,16 @@ from PIL import Image
 import io
 from pytesseract import image_to_string
 
-require("nonebot_plugin_uninfo")
-require("nonebot_plugin_alconna")
-require("nonebot_plugin_localstore")
-require("nonebot_plugin_apscheduler")
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
     name="电费查询",
-    description="sues账单查询插件",
-    usage="见 #电费帮助",
-    type="application",  # library
-    homepage="https://github.com/noel-psc/nonebot-plugin-sues-bill",
+    description="电费查询插件",
+    usage="电费 [房间号]\n设置电费账号 用户名 密码",
     config=Config,
-    supported_adapters=inherit_supported_adapters(
-        "nonebot_plugin_alconna", "nonebot_plugin_uninfo"
-    ),
-    # supported_adapters={"~onebot.v11"}, # 仅 onebot
-    extra={"author": "noel-psc <your@mail.com>"},
 )
 
-from arclet.alconna import Args, Option, Alconna, Arparma, Subcommand
-from nonebot_plugin_alconna import on_alconna
-from nonebot_plugin_alconna.uniseg import UniMessage
-
-pip = on_alconna(
-    Alconna(
-        "pip",
-        Subcommand(
-            "install",
-            Args["package", str],
-            Option("-r|--requirement", Args["file", str]),
-            Option("-i|--index-url", Args["url", str]),
-        ),
-    )
-)
-
-
-@pip.handle()
-async def _(result: Arparma):
-    package: str = result.other_args["package"]
-    logger.info(f"installing {package}")
-    await UniMessage.text(package).send()
+config = get_plugin_config(Config)
 
 # 配置
 BASE_URL = 'https://epay.sues.edu.cn'
@@ -116,7 +84,7 @@ def recognize_captcha(image_content):
     try:
         img = Image.open(io.BytesIO(image_content))
         img = img.convert('L')
-        img = img.point(lambda x: 0 if cast(int, x) < 128 else 255, '1')
+        img = img.point(lambda x: 0 if x < 128 else 255, '1')
         captcha = image_to_string(img, config='--psm 7 -c tessedit_char_whitelist=0123456789')
         captcha = captcha.strip()
         return captcha if captcha else None
@@ -197,7 +165,7 @@ def login(session, username, password):
         print(f"登录失败: {str(e)}")
         return False
 
-def query_electric_bill(sysid, roomid, areaid, buildid, username=None, password=None):
+def query_electric_bill(sysid='4', roomid='4021', areaid='101', buildid='13', username=None, password=None):
     """查询宿舍电费信息"""
     try:
         session = requests.Session()
@@ -314,14 +282,21 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
     arg_text = args.extract_plain_text().strip()
     
     # 解析参数
-    parts = arg_text.split()
-    if len(parts) >= 4:
-        sysid = parts[0]
-        roomid = parts[1]
-        areaid = parts[2]
-        buildid = parts[3]
+    if arg_text:
+        parts = arg_text.split()
+        if len(parts) >= 4:
+            sysid = parts[0]
+            roomid = parts[1]
+            areaid = parts[2]
+            buildid = parts[3]
+        else:
+            await electric_query.finish("参数不足，格式：#电费 [系统ID] [房间号] [区域ID] [楼栋ID]\n或直接使用“#电费”使用默认参数")
     else:
-        await electric_query.finish("参数不足，格式：#电费 [系统ID] [房间号] [区域ID] [楼栋ID]\n")
+        # 使用默认参数
+        sysid = '4'
+        roomid = '4021'
+        areaid = '101'
+        buildid = '13'
     
     # 查询电费
     result = query_electric_bill(
@@ -340,5 +315,4 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
 
 @electric_help.handle()
 async def handle_electric_help(bot: Bot, event: Event, args: Message = CommandArg()):
-    await electric_query.finish("====电费查询帮助菜单====\n系统ID：\n  3：后勤部综合楼\n  4：上海工程技术大学电控充值\n区域ID：\n  101：三期学生公寓\n  102四期学生公寓\n  104：长宁南北宿舍楼\n  105：研究生一号楼9-11层\n  106：北区创客中心\n  107：长宁产教融合大楼\n  108：研究生宿舍楼\n楼栋ID：\n  2：三期10     3：三期11     4：三期12\n  5：三期13     6：三期14     7：三期15\n  8：三期16     9：三期17     10：三期18\n  11：三期19   12：三期20   13：三期21\n  14：三期22   15：三期23   16：三期24\n  17：三期25   18：三期26   19：四期20\n  20：四期21   21：四期23   22：四期24\n  23：四期27   24：四期28   25：四期29\n  26：四期30   27：四期33   28：四期34\n  29：四期35   30：四期36   31：四期39\n  32：四期40   33：四期41   34：四期42\n  35：南楼   36：北楼\n  38：研究生一号楼\n  39：创客中心\n  40：产教融合4-9楼\n  41：产教融合10-15楼\n  42：研究生二号楼1-6层\n  43：研究生一号楼1-4层\n  44：研究生二号楼7-12层\n  45：研究生一号楼5-8层\n")
-
+    await electric_query.finish("====电费查询帮助菜单====\n  格式：#电费 [系统ID] [房间号] [区域ID] [楼栋ID]\n系统ID：\n  3：后勤部综合楼\n  4：上海工程技术大学电控充值\n区域ID：\n  101：三期学生公寓\n  102四期学生公寓\n  104：长宁南北宿舍楼\n  105：研究生一号楼9-11层\n  106：北区创客中心\n  107：长宁产教融合大楼\n  108：研究生宿舍楼\n楼栋ID：\n  2：三期10     3：三期11     4：三期12\n  5：三期13     6：三期14     7：三期15\n  8：三期16     9：三期17     10：三期18\n  11：三期19   12：三期20   13：三期21\n  14：三期22   15：三期23   16：三期24\n  17：三期25   18：三期26   19：四期20\n  20：四期21   21：四期23   22：四期24\n  23：四期27   24：四期28   25：四期29\n  26：四期30   27：四期33   28：四期34\n  29：四期35   30：四期36   31：四期39\n  32：四期40   33：四期41   34：四期42\n  35：南楼   36：北楼\n  38：研究生一号楼\n  39：创客中心\n  40：产教融合4-9楼\n  41：产教融合10-15楼\n  42：研究生二号楼1-6层\n  43：研究生一号楼1-4层\n  44：研究生二号楼7-12层\n  45：研究生一号楼5-8层\n")
