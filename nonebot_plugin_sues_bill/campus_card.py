@@ -46,10 +46,11 @@ def recognize_captcha(image_content: bytes) -> str | None:
 
 
 def login(session: requests.Session, username: str, password: str) -> bool:
-    """登录校园卡系统"""
+    """登录校园卡系统（H5移动端）"""
     try:
-        # 获取登录页
-        resp = session.get(f"{BASE_URL}/epay/person/index")
+        # 先访问 H5 首页，会重定向到登录页
+        resp = session.get(INDEX_URL, allow_redirects=True)
+        logger.info(f"H5登录页: {resp.url}")
 
         # 提取 CSRF token
         csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"/>', resp.text)
@@ -106,10 +107,9 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         login_resp = session.post(form_action, data=form_data, headers=headers)
         logger.info(f"登录响应: status={login_resp.status_code}, url={login_resp.url}")
 
-        # 检查是否登录成功
-        if "登录" not in login_resp.text and "错误" not in login_resp.text:
-            # 访问首页建立会话
-            session.get(f"{BASE_URL}/")
+        # 检查是否登录成功（访问 H5 首页验证）
+        check_resp = session.get(INDEX_URL)
+        if "账户余额" in check_resp.text:
             return True
 
         logger.warning(f"登录失败, resp URL: {login_resp.url}")
