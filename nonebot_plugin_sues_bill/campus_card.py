@@ -7,10 +7,10 @@ import base64
 import ddddocr
 import requests
 from nonebot import logger, on_command
-from Crypto.Cipher import PKCS1_v1_5
+from Crypto.Cipher import DES
 from nonebot.params import CommandArg
-from Crypto.PublicKey import RSA
 from nonebot.adapters import Message
+from Crypto.Util.Padding import pad
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .models import DATA_DIR
@@ -48,13 +48,12 @@ def recognize_captcha(image_content: bytes) -> str | None:
         return None
 
 
-def rsa_encrypt(password: str, modulus_hex: str, exponent_hex: str) -> str:
-    """RSA 加密密码"""
-    modulus = int(modulus_hex, 16)
-    exponent = int(exponent_hex, 16)
-    pub_key = RSA.construct((modulus, exponent))
-    cipher = PKCS1_v1_5.new(pub_key)
-    encrypted = cipher.encrypt(password.encode())
+def des_encrypt(password: str) -> str:
+    """DES-CBC 加密密码"""
+    key = b"6eGicG6U"
+    iv = bytes([1, 2, 3, 4, 5, 6, 7, 8])
+    cipher = DES.new(key, DES.MODE_CBC, iv)
+    encrypted = cipher.encrypt(pad(password.encode(), DES.block_size))
     return base64.b64encode(encrypted).decode()
 
 
@@ -107,21 +106,8 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         )
         form_data = dict(input_matches)
 
-        # 提取 RSA 加密参数（从 JavaScript 中提取）
-        rsa_match = re.search(
-            r'RSAKeyPair\("([^"]+)","([^"]*)","([^"]+)"\)', resp.text
-        )
-
-        # 加密密码
-        if rsa_match:
-            exponent = rsa_match.group(1)
-            modulus = rsa_match.group(3)
-            encrypted_pwd = rsa_encrypt(password, modulus, exponent)
-            form_data["j_password"] = encrypted_pwd
-            logger.info("使用 RSA 加密密码")
-        else:
-            form_data["j_password"] = password
-            logger.info("未找到 RSA 参数，使用明文密码")
+        # DES 加密密码
+        form_data["j_password"] = des_encrypt(password)
 
         form_data["j_username"] = username
         if captcha:
