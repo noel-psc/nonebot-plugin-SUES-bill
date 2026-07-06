@@ -107,18 +107,21 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
         login_resp = session.post(form_action, data=form_data, headers=headers)
         logger.info(f"登录响应: status={login_resp.status_code}, url={login_resp.url}")
-        logger.info(f"登录响应前500字:\n{login_resp.text[:500]}")
         logger.info(f"登录后cookies: {dict(session.cookies)}")
 
-        # 检查是否登录成功
-        check_resp = session.get(INDEX_URL)
-        logger.info(f"H5检查: url={check_resp.url}, len={len(check_resp.text)}")
-        if "账户余额" in check_resp.text:
-            return True
-        if "登录已过期" in check_resp.text:
-            logger.info("H5显示'登录已过期'")
+        # 尝试访问桌面首页
+        desktop_resp = session.get(f"{BASE_URL}/epay/")
+        logger.info(f"桌面首页: url={desktop_resp.url}, len={len(desktop_resp.text)}")
+        if "我的账户" in desktop_resp.text or "余额" in desktop_resp.text:
+            logger.info("桌面首页显示已登录")
 
-        logger.warning("登录失败")
+        # 尝试访问 H5
+        h5_resp = session.get(INDEX_URL)
+        logger.info(f"H5: url={h5_resp.url}, len={len(h5_resp.text)}")
+        if "账户余额" in h5_resp.text:
+            return True
+
+        return False
         return False
     except Exception as e:
         logger.error(f"登录异常: {e}")
