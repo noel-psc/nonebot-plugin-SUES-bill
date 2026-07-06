@@ -72,8 +72,10 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"', resp.text)
         csrf_token = csrf_match.group(1) if csrf_match else ""
 
-        # 提取验证码图片 URL 并识别
-        captcha_match = re.search(r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text)
+        # 提取验证码图片 URL 并识别（可能用单引号或双引号）
+        captcha_match = re.search(
+            r"""<img[^>]+src=(?:"|')([^"']*codeimage[^"']*)(?:"|')""", resp.text
+        )
         captcha = None
         if captcha_match:
             captcha_url = captcha_match.group(1)
