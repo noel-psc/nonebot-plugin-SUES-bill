@@ -8,7 +8,7 @@ from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import BASE_URL, USER_AGENT, ELECTRIC_QUERY_PATH
-from .models import load_user_data, save_user_data
+from .models import get_user_file, load_user_data, save_user_data
 
 # 请求超时（秒）
 REQUEST_TIMEOUT = 10
@@ -223,8 +223,6 @@ async def handle_electric_help_detail(
 @electric_clear.handle()
 async def handle_electric_clear(bot: Bot, event: Event, args: Message = CommandArg()):
     user_id = event.get_user_id()
-    from .models import get_user_file
-
     user_file = get_user_file(str(user_id))
     user_file.unlink(missing_ok=True)
     await electric_clear.finish("已清除保存的查询参数")

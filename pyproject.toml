@@ -47,7 +47,7 @@ nonebug = { git = "https://github.com/nonebot/nonebug" }
 [tool.bumpversion]
 current_version = "1.0.1"
 commit = true
-message = "release: bump vesion from {current_version} to {new_version}"
+message = "release: bump version from {current_version} to {new_version}"
 tag = true
 
 [[tool.bumpversion.files]]

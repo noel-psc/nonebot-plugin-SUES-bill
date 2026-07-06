@@ -1,7 +1,6 @@
 """校园卡余额查询模块"""
 
 import re
-import json
 import asyncio
 
 import ddddocr
@@ -21,7 +20,7 @@ from .config import (
     USER_AGENT,
     CAMPUS_CARD_INDEX_PATH,
 )
-from .models import DATA_DIR
+from .models import DATA_DIR, load_json, save_json
 
 # 完整 URL
 INDEX_URL = BASE_URL + CAMPUS_CARD_INDEX_PATH
@@ -81,26 +80,18 @@ def _decrypt_password(encrypted: str) -> str:
 
 def load_account() -> dict:
     """加载校园卡账号"""
-    if ACCOUNT_FILE.exists():
-        try:
-            with open(ACCOUNT_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-            # 解密密码
-            if "password" in data and data["password"].startswith("gAAAAA"):
-                data["password"] = _decrypt_password(data["password"])
-            return data
-        except (json.JSONDecodeError, OSError, Exception) as e:
-            logger.error(f"加载账号失败: {e}")
-            return {}
-    return {}
+    data = load_json(ACCOUNT_FILE)
+    # 解密密码
+    if "password" in data and data["password"].startswith("gAAAAA"):
+        data["password"] = _decrypt_password(data["password"])
+    return data
 
 
 def save_account(username: str, password: str):
     """保存校园卡账号（密码加密存储）"""
     _ensure_dir()
     encrypted = _encrypt_password(password)
-    with open(ACCOUNT_FILE, "w", encoding="utf-8") as f:
-        json.dump({"username": username, "password": encrypted}, f, indent=2)
+    save_json(ACCOUNT_FILE, {"username": username, "password": encrypted})
 
 
 # ─── 工具函数 ─────────────────────────────────────────────
@@ -134,7 +125,7 @@ def _create_session() -> requests.Session:
 # ─── 登录 ─────────────────────────────────────────────────
 
 
-def _do_login(username: str, password: str) -> bool:
+def _do_login(username: str, password: str):
     """执行登录（同步，在线程池中运行）"""
     try:
         session = _create_session()
@@ -175,7 +166,7 @@ def _do_login(username: str, password: str) -> bool:
             )
         if not form_match:
             logger.warning("未找到登录表单")
-            return False
+            return None
 
         form_action = form_match.group(1)
         if form_action.startswith("/"):
@@ -201,27 +192,28 @@ def _do_login(username: str, password: str) -> bool:
         # 验证：访问 H5 首页检查是否显示余额
         h5_resp = session.get(INDEX_URL, timeout=REQUEST_TIMEOUT)
         h5_resp.raise_for_status()
-        return "账户余额" in h5_resp.text
+        if "账户余额" in h5_resp.text:
+            return session
+        return None
     except requests.Timeout:
         logger.error("登录超时")
-        return False
+        return None
     except Exception as e:
         logger.error(f"登录异常: {e}")
-        return False
+        return None
 
 
-async def login(username: str, password: str) -> bool:
-    """登录校园卡系统（异步包装）"""
+async def login(username: str, password: str):
+    """登录校园卡系统（异步包装，返回 session）"""
     return await asyncio.to_thread(_do_login, username, password)
 
 
 # ─── 查询 ─────────────────────────────────────────────────
 
 
-def _do_query_balance() -> dict:
+def _do_query_balance(session: requests.Session) -> dict:
     """查询校园卡余额（同步，在线程池中运行）"""
     try:
-        session = _create_session()
         resp = session.get(INDEX_URL, timeout=REQUEST_TIMEOUT)
 
         # 提取余额
@@ -245,9 +237,9 @@ def _do_query_balance() -> dict:
         return {"retcode": -1, "retmsg": f"查询失败: {e}"}
 
 
-async def query_balance() -> dict:
+async def query_balance(session: requests.Session) -> dict:
     """查询校园卡余额（异步包装）"""
-    return await asyncio.to_thread(_do_query_balance)
+    return await asyncio.to_thread(_do_query_balance, session)
 
 
 # ─── 处理器 ───────────────────────────────────────────────
@@ -268,12 +260,13 @@ async def handle_campus_card_query(
             "未设置账号，请先私聊发送：\n设置校园卡账号 学号 密码"
         )
 
-    # 登录
-    if not await login(account["username"], account["password"]):
+    # 登录并获取 session
+    session = await login(account["username"], account["password"])
+    if not session:
         await campus_card_query.finish("登录失败，请检查账号密码或验证码")
 
     # 查询余额
-    result = await query_balance()
+    result = await query_balance(session)
     if result.get("retcode") == 0:
         await campus_card_query.finish(
             f"💳 校园卡余额\n"
