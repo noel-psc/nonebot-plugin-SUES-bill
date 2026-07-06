@@ -1,13 +1,17 @@
 import re
+import asyncio
 
 import requests
-from nonebot import on_command
+from nonebot import logger, on_command
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import BASE_URL, USER_AGENT, ELECTRIC_QUERY_PATH
 from .models import load_user_data, save_user_data
+
+# 请求超时（秒）
+REQUEST_TIMEOUT = 10
 
 AREA_MAP = {
     "三期": ("4", "101"),
@@ -51,8 +55,8 @@ BUILD_MAP = {
 }
 
 
-def query_electric_bill(sysid="4", roomid="4021", areaid="101", buildid="13"):
-    """查询宿舍电费信息"""
+def _do_query_electric_bill(sysid, roomid, areaid, buildid):
+    """查询宿舍电费信息（同步，在线程池中运行）"""
     try:
         session = requests.Session()
         headers = {"User-Agent": USER_AGENT}
@@ -63,14 +67,30 @@ def query_electric_bill(sysid="4", roomid="4021", areaid="101", buildid="13"):
             "buildid": buildid,
         }
         resp = session.get(
-            BASE_URL + ELECTRIC_QUERY_PATH, params=params, headers=headers
+            BASE_URL + ELECTRIC_QUERY_PATH,
+            params=params,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
         )
         match = re.search(r"(\d+\.?\d*)\s*度", resp.text)
         if match:
             return {"retcode": 0, "restElecDegree": float(match.group(1))}
         return {"retcode": -1, "retmsg": "未找到剩余电量信息"}
+    except requests.Timeout:
+        logger.error("电费查询超时")
+        return {"retcode": -1, "retmsg": "查询超时"}
     except Exception as e:
+        logger.error(f"电费查询异常: {e}")
         return {"retcode": -1, "retmsg": f"错误: {e}"}
+
+
+async def query_electric_bill(
+    sysid="4", roomid="4021", areaid="101", buildid="13"
+):
+    """查询宿舍电费信息（异步包装）"""
+    return await asyncio.to_thread(
+        _do_query_electric_bill, sysid, roomid, areaid, buildid
+    )
 
 
 electric_query = on_command("电费", priority=5, block=True)
@@ -115,7 +135,7 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
             )
         query_params = data["query_params"]
 
-    result = query_electric_bill(**query_params)
+    result = await query_electric_bill(**query_params)
     if result.get("retcode") == 0:
         data["query_params"] = query_params
         save_user_data(str(user_id), data)
@@ -132,7 +152,7 @@ async def handle_electric_raw(bot: Bot, event: Event, args: Message = CommandArg
     parts = arg_text.split()
     if len(parts) < 4:
         await electric_raw.finish("需要4个参数：sysid roomid areaid buildid")
-    result = query_electric_bill(*parts[:4])
+    result = await query_electric_bill(*parts[:4])
     if result.get("retcode") == 0:
         await electric_raw.finish(f"剩余电量: {result['restElecDegree']} 度")
     await electric_raw.finish(f"查询失败: {result.get('retmsg', '未知错误')}")

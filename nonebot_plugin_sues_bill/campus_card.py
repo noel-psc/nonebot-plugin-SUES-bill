@@ -2,6 +2,7 @@
 
 import re
 import json
+import asyncio
 
 import ddddocr
 import requests
@@ -10,6 +11,7 @@ from Crypto.Cipher import DES
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from Crypto.Util.Padding import pad
+from cryptography.fernet import Fernet
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import (
@@ -26,6 +28,52 @@ INDEX_URL = BASE_URL + CAMPUS_CARD_INDEX_PATH
 
 # 账号存储文件
 ACCOUNT_FILE = DATA_DIR / "campus_card_account.json"
+KEY_FILE = DATA_DIR / "secret.key"
+
+# 请求超时（秒）
+REQUEST_TIMEOUT = 10
+
+# 缓存 ddddocr 实例
+_ocr_instance = None
+
+
+def _get_ocr():
+    """获取 OCR 实例（懒加载，避免重复初始化）"""
+    global _ocr_instance
+    if _ocr_instance is None:
+        _ocr_instance = ddddocr.DdddOcr(show_ad=False)
+    return _ocr_instance
+
+
+# ─── 加密工具 ─────────────────────────────────────────────
+
+
+def _get_or_create_key() -> bytes:
+    """获取或创建加密密钥"""
+    _ensure_dir()
+    if KEY_FILE.exists():
+        return KEY_FILE.read_bytes()
+    key = Fernet.generate_key()
+    KEY_FILE.write_bytes(key)
+    return key
+
+
+def _ensure_dir():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _encrypt_password(password: str) -> str:
+    """加密密码"""
+    key = _get_or_create_key()
+    f = Fernet(key)
+    return f.encrypt(password.encode()).decode()
+
+
+def _decrypt_password(encrypted: str) -> str:
+    """解密密码"""
+    key = _get_or_create_key()
+    f = Fernet(key)
+    return f.decrypt(encrypted.encode()).decode()
 
 
 # ─── 存储工具 ─────────────────────────────────────────────
@@ -36,16 +84,23 @@ def load_account() -> dict:
     if ACCOUNT_FILE.exists():
         try:
             with open(ACCOUNT_FILE, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
+                data = json.load(f)
+            # 解密密码
+            if "password" in data and data["password"].startswith("gAAAAA"):
+                data["password"] = _decrypt_password(data["password"])
+            return data
+        except (json.JSONDecodeError, OSError, Exception) as e:
+            logger.error(f"加载账号失败: {e}")
             return {}
     return {}
 
 
 def save_account(username: str, password: str):
-    """保存校园卡账号"""
+    """保存校园卡账号（密码加密存储）"""
+    _ensure_dir()
+    encrypted = _encrypt_password(password)
     with open(ACCOUNT_FILE, "w", encoding="utf-8") as f:
-        json.dump({"username": username, "password": password}, f, indent=2)
+        json.dump({"username": username, "password": encrypted}, f, indent=2)
 
 
 # ─── 工具函数 ─────────────────────────────────────────────
@@ -54,7 +109,7 @@ def save_account(username: str, password: str):
 def recognize_captcha(image_content: bytes) -> str | None:
     """OCR 识别验证码"""
     try:
-        ocr = ddddocr.DdddOcr(show_ad=False)
+        ocr = _get_ocr()
         result = ocr.classification(image_content)
         return result if result else None
     except Exception as e:
@@ -69,18 +124,33 @@ def des_encrypt(password: str) -> str:
     return encrypted.hex()
 
 
+def _create_session() -> requests.Session:
+    """创建带 User-Agent 的会话"""
+    session = requests.Session()
+    session.headers["User-Agent"] = USER_AGENT
+    return session
+
+
 # ─── 登录 ─────────────────────────────────────────────────
 
 
-def login(session: requests.Session, username: str, password: str) -> bool:
-    """登录校园卡系统（桌面端登录，session 与 H5 共享）"""
+def _do_login(username: str, password: str) -> bool:
+    """执行登录（同步，在线程池中运行）"""
     try:
+        session = _create_session()
+
         # 获取登录页
-        resp = session.get(f"{BASE_URL}/epay/person/index")
+        resp = session.get(
+            f"{BASE_URL}/epay/person/index", timeout=REQUEST_TIMEOUT
+        )
 
         # 提取 CSRF token
-        csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"/>', resp.text)
+        csrf_match = re.search(
+            r'<meta name="_csrf" content="([^"]+)"/>', resp.text
+        )
         csrf_token = csrf_match.group(1) if csrf_match else ""
+        if not csrf_token:
+            logger.warning("未找到 CSRF token")
 
         # 提取验证码并识别
         captcha_match = re.search(
@@ -91,7 +161,7 @@ def login(session: requests.Session, username: str, password: str) -> bool:
             captcha_url = captcha_match.group(1)
             if not captcha_url.startswith("http"):
                 captcha_url = BASE_URL + captcha_url
-            captcha_resp = session.get(captcha_url)
+            captcha_resp = session.get(captcha_url, timeout=REQUEST_TIMEOUT)
             captcha = recognize_captcha(captcha_resp.content)
 
         # 提取登录表单 action
@@ -116,7 +186,7 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         )
         form_data = dict(input_matches)
 
-        # 添加登录字段（DES 加密密码）
+        # 添加登录字段
         form_data["j_username"] = username
         form_data["j_password"] = des_encrypt(password)
         if captcha:
@@ -124,27 +194,41 @@ def login(session: requests.Session, username: str, password: str) -> bool:
 
         # 提交登录
         headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
-        session.post(form_action, data=form_data, headers=headers)
+        session.post(form_action, data=form_data, headers=headers,
+                     timeout=REQUEST_TIMEOUT)
 
         # 验证：访问 H5 首页检查是否显示余额
-        h5_resp = session.get(INDEX_URL)
+        h5_resp = session.get(INDEX_URL, timeout=REQUEST_TIMEOUT)
         return "账户余额" in h5_resp.text
+    except requests.Timeout:
+        logger.error("登录超时")
+        return False
     except Exception as e:
         logger.error(f"登录异常: {e}")
         return False
 
 
+async def login(username: str, password: str) -> bool:
+    """登录校园卡系统（异步包装）"""
+    return await asyncio.to_thread(_do_login, username, password)
+
+
 # ─── 查询 ─────────────────────────────────────────────────
 
 
-def query_balance(session: requests.Session) -> dict:
-    """查询校园卡余额"""
+def _do_query_balance() -> dict:
+    """查询校园卡余额（同步，在线程池中运行）"""
     try:
-        resp = session.get(INDEX_URL)
+        session = _create_session()
+        resp = session.get(INDEX_URL, timeout=REQUEST_TIMEOUT)
 
         # 提取余额
-        balance_match = re.search(r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
-        frozen_match = re.search(r"冻结余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
+        balance_match = re.search(
+            r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL
+        )
+        frozen_match = re.search(
+            r"冻结余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL
+        )
 
         if balance_match:
             return {
@@ -153,8 +237,15 @@ def query_balance(session: requests.Session) -> dict:
                 "frozen": frozen_match.group(1) if frozen_match else "0.00",
             }
         return {"retcode": -1, "retmsg": "未找到余额信息"}
+    except requests.Timeout:
+        return {"retcode": -1, "retmsg": "查询超时"}
     except Exception as e:
         return {"retcode": -1, "retmsg": f"查询失败: {e}"}
+
+
+async def query_balance() -> dict:
+    """查询校园卡余额（异步包装）"""
+    return await asyncio.to_thread(_do_query_balance)
 
 
 # ─── 处理器 ───────────────────────────────────────────────
@@ -175,15 +266,12 @@ async def handle_campus_card_query(
             "未设置账号，请先私聊发送：\n设置校园卡账号 学号 密码"
         )
 
-    # 创建会话并登录
-    session = requests.Session()
-    session.headers["User-Agent"] = USER_AGENT
-
-    if not login(session, account["username"], account["password"]):
+    # 登录
+    if not await login(account["username"], account["password"]):
         await campus_card_query.finish("登录失败，请检查账号密码或验证码")
 
     # 查询余额
-    result = query_balance(session)
+    result = await query_balance()
     if result.get("retcode") == 0:
         await campus_card_query.finish(
             f"💳 校园卡余额\n"
@@ -207,7 +295,8 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
     if not arg_text:
         await campus_card_set.finish("格式：设置校园卡账号 学号 密码")
 
-    parts = arg_text.split()
+    # 支持密码包含空格
+    parts = arg_text.split(maxsplit=1)
     if len(parts) < 2:
         await campus_card_set.finish("格式：设置校园卡账号 学号 密码")
 
