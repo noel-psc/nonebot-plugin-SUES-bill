@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-sues-bill"
-version = "1.0.2"
+version = "1.0.3"
 description = "查询sues账单"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,7 +44,7 @@ build-backend = "hatchling.build"
 nonebug = { git = "https://github.com/nonebot/nonebug" }
 
 [tool.bumpversion]
-current_version = "1.0.2"
+current_version = "1.0.3"
 commit = true
 message = "release: bump version from {current_version} to {new_version}"
 tag = true
