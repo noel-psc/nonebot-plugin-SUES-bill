@@ -107,13 +107,16 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
         login_resp = session.post(form_action, data=form_data, headers=headers)
         logger.info(f"登录响应: status={login_resp.status_code}, url={login_resp.url}")
+        logger.info(f"登录响应全文:\n{login_resp.text}")
         logger.info(f"登录后cookies: {dict(session.cookies)}")
 
-        # 尝试访问桌面首页
-        desktop_resp = session.get(f"{BASE_URL}/epay/")
-        logger.info(f"桌面首页: url={desktop_resp.url}, len={len(desktop_resp.text)}")
-        if "我的账户" in desktop_resp.text or "余额" in desktop_resp.text:
-            logger.info("桌面首页显示已登录")
+        # 检查是否被锁定
+        if "锁定" in login_resp.text or "锁定" in login_resp.text:
+            logger.warning("账号已被锁定")
+            return False
+        if "错误" in login_resp.text or "失败" in login_resp.text:
+            logger.warning("登录失败")
+            return False
 
         # 尝试访问 H5
         h5_resp = session.get(INDEX_URL)
