@@ -2,7 +2,6 @@
 
 import re
 import json
-import base64
 
 import ddddocr
 import requests
@@ -49,12 +48,12 @@ def recognize_captcha(image_content: bytes) -> str | None:
 
 
 def des_encrypt(password: str) -> str:
-    """DES-CBC 加密密码"""
+    """DES-CBC 加密密码（返回 hex 格式）"""
     key = b"6eGicG6U"
     iv = bytes([1, 2, 3, 4, 5, 6, 7, 8])
     cipher = DES.new(key, DES.MODE_CBC, iv)
     encrypted = cipher.encrypt(pad(password.encode(), DES.block_size))
-    return base64.b64encode(encrypted).decode()
+    return encrypted.hex()
 
 
 def login(session: requests.Session, username: str, password: str) -> bool:
