@@ -48,7 +48,7 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
     uv add nonebot-plugin-sues-bill
 安装仓库 master 分支
 
-    uv add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@master
+    uv add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@main
 </details>
 
 <details>
@@ -57,7 +57,7 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
     pdm add nonebot-plugin-sues-bill
 安装仓库 master 分支
 
-    pdm add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@master
+    pdm add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@main
 </details>
 <details>
 <summary>poetry</summary>
@@ -65,7 +65,7 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
     poetry add nonebot-plugin-sues-bill
 安装仓库 master 分支
 
-    poetry add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@master
+    poetry add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@main
 </details>
 
 打开 nonebot2 项目根目录下的 `pyproject.toml` 文件, 在 `[tool.nonebot]` 部分追加写入
