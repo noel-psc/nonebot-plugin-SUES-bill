@@ -15,7 +15,11 @@
 
 ## 📖 介绍
 
-这里是插件的详细介绍部分
+SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡余额。
+
+主要功能：
+- 🔌 **电费查询** — 查询宿舍剩余电量，支持记忆上次查询参数
+- 💳 **校园卡查询** — 查询校园卡账户余额和冻结余额
 
 ## 💿 安装
 
@@ -44,7 +48,7 @@
     uv add nonebot-plugin-sues-bill
 安装仓库 master 分支
 
-    uv add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@master
+    uv add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@main
 </details>
 
 <details>
@@ -53,7 +57,7 @@
     pdm add nonebot-plugin-sues-bill
 安装仓库 master 分支
 
-    pdm add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@master
+    pdm add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@main
 </details>
 <details>
 <summary>poetry</summary>
@@ -61,7 +65,7 @@
     poetry add nonebot-plugin-sues-bill
 安装仓库 master 分支
 
-    poetry add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@master
+    poetry add git+https://github.com/noel-psc/nonebot-plugin-sues-bill@main
 </details>
 
 打开 nonebot2 项目根目录下的 `pyproject.toml` 文件, 在 `[tool.nonebot]` 部分追加写入
@@ -88,19 +92,59 @@
 
 ## ⚙️ 配置
 
-在 nonebot2 项目的`.env`文件中添加下表中的必填配置
+在 nonebot2 项目的`.env`文件中添加下表中的配置项（可选）
 
 | 配置项  | 必填  | 默认值 |   说明   |
 | :-----: | :---: | :----: | :------: |
-| 配置项1 |  是   |   无   | 配置说明 |
-| 配置项2 |  否   |   无   | 配置说明 |
+| sues_base_url | 否 | `https://epay.sues.edu.cn` | SUES 一卡通系统地址 |
 
 ## 🎉 使用
 ### 指令表
+
+#### 电费查询
+
 | 指令  | 权限  | 需要@ | 范围  |   说明   |
 | :---: | :---: | :---: | :---: | :------: |
-| 指令1 | 主人  |  否   | 私聊  | 指令说明 |
-| 指令2 | 群员  |  是   | 群聊  | 指令说明 |
+| #电费 | 群员 | 否 | 私聊/群聊 | 查询宿舍电费（使用上次保存的参数） |
+| #电费 区域 楼栋 房间号 | 群员 | 否 | 私聊/群聊 | 查询指定宿舍电费 |
+| #电费帮助 | 群员 | 否 | 私聊/群聊 | 查看电费查询帮助 |
+| #电费详细帮助 | 群员 | 否 | 私聊/群聊 | 查看详细参数说明 |
+| #清除电费设置 | 群员 | 否 | 私聊/群聊 | 清除保存的查询参数 |
+
+<details>
+<summary>支持的区域和楼栋</summary>
+
+**三期学生公寓**：10-26栋
+**四期学生公寓**：20、21、23、24、27-30、33-36、39-42栋
+
+示例：
+```
+#电费 三期 21 1001
+#电费 四期 28 1021
+```
+</details>
+
+#### 校园卡查询
+
+| 指令  | 权限  | 需要@ | 范围  |   说明   |
+| :---: | :---: | :---: | :---: | :------: |
+| #校园卡 | 群员 | 否 | 私聊/群聊 | 查询校园卡余额 |
+| #校园卡帮助 | 群员 | 否 | 私聊/群聊 | 查看校园卡帮助 |
+| #设置校园卡账号 学号 密码 | 群员 | 否 | 仅私聊 | 设置校园卡账号（密码加密存储） |
+
+> ⚠️ **安全提示**：校园卡账号仅限私聊设置（`#设置校园卡账号`），密码使用 Fernet 加密后存储在本地。
 
 ### 🎨 效果图
-如果有效果图的话
+
+**电费查询**：
+```
+剩余电量: 128.5 度
+```
+
+**校园卡查询**：
+```
+💳 校园卡余额
+━━━━━━━━━━━━
+账户余额: ￥128.50
+冻结余额: ￥0.00
+```
