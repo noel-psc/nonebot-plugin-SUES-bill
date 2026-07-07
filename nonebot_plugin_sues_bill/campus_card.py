@@ -1,11 +1,10 @@
 """校园卡余额查询模块"""
 
 import re
-import asyncio
 
 import ddddocr
-import requests
-from nonebot import logger, on_command
+import httpx
+from nonebot import get_plugin_config, logger, on_command
 from Crypto.Cipher import DES
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
@@ -14,9 +13,9 @@ from cryptography.fernet import Fernet
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import (
+    Config,
     DES_IV,
     DES_KEY,
-    BASE_URL,
     USER_AGENT,
     CAMPUS_CARD_INDEX_PATH,
 )
@@ -26,8 +25,10 @@ from .models import (
     save_campus_card_account,
 )
 
+config = get_plugin_config(Config)
+
 # 完整 URL
-INDEX_URL = BASE_URL + CAMPUS_CARD_INDEX_PATH
+INDEX_URL = config.sues_base_url + CAMPUS_CARD_INDEX_PATH
 
 # 加密密钥文件
 KEY_FILE = DATA_DIR / "secret.key"
@@ -117,25 +118,20 @@ def des_encrypt(password: str) -> str:
     return encrypted.hex()
 
 
-def _create_session() -> requests.Session:
-    """创建带 User-Agent 的会话"""
-    session = requests.Session()
-    session.headers["User-Agent"] = USER_AGENT
-    return session
-
-
 # ─── 登录 ─────────────────────────────────────────────────
 
 
-def _do_login(username: str, password: str):
-    """执行登录（同步，在线程池中运行）"""
+async def login(username: str, password: str) -> httpx.AsyncClient | None:
+    """登录校园卡系统，返回已认证的 httpx 客户端"""
     try:
-        session = _create_session()
+        client = httpx.AsyncClient(
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT,
+            follow_redirects=True,
+        )
 
         # 获取登录页
-        resp = session.get(
-            f"{BASE_URL}/epay/person/index", timeout=REQUEST_TIMEOUT
-        )
+        resp = await client.get(f"{config.sues_base_url}/epay/person/index")
         resp.raise_for_status()
 
         # 提取 CSRF token
@@ -154,8 +150,8 @@ def _do_login(username: str, password: str):
         if captcha_match:
             captcha_url = captcha_match.group(1)
             if not captcha_url.startswith("http"):
-                captcha_url = BASE_URL + captcha_url
-            captcha_resp = session.get(captcha_url, timeout=REQUEST_TIMEOUT)
+                captcha_url = config.sues_base_url + captcha_url
+            captcha_resp = await client.get(captcha_url)
             captcha = recognize_captcha(captcha_resp.content)
 
         # 提取登录表单 action
@@ -168,11 +164,12 @@ def _do_login(username: str, password: str):
             )
         if not form_match:
             logger.warning("未找到登录表单")
+            await client.aclose()
             return None
 
         form_action = form_match.group(1)
         if form_action.startswith("/"):
-            form_action = BASE_URL + form_action
+            form_action = config.sues_base_url + form_action
 
         # 提取所有隐藏字段
         input_matches = re.findall(
@@ -188,16 +185,16 @@ def _do_login(username: str, password: str):
 
         # 提交登录
         headers = {"X-CSRF-TOKEN": csrf_token} if csrf_token else {}
-        session.post(form_action, data=form_data, headers=headers,
-                     timeout=REQUEST_TIMEOUT)
+        await client.post(form_action, data=form_data, headers=headers)
 
         # 验证：访问 H5 首页检查是否显示余额
-        h5_resp = session.get(INDEX_URL, timeout=REQUEST_TIMEOUT)
+        h5_resp = await client.get(INDEX_URL)
         h5_resp.raise_for_status()
         if "账户余额" in h5_resp.text:
-            return session
+            return client
+        await client.aclose()
         return None
-    except requests.Timeout:
+    except httpx.TimeoutException:
         logger.error("登录超时")
         return None
     except Exception as e:
@@ -205,18 +202,13 @@ def _do_login(username: str, password: str):
         return None
 
 
-async def login(username: str, password: str):
-    """登录校园卡系统（异步包装，返回 session）"""
-    return await asyncio.to_thread(_do_login, username, password)
-
-
 # ─── 查询 ─────────────────────────────────────────────────
 
 
-def _do_query_balance(session: requests.Session) -> dict:
-    """查询校园卡余额（同步，在线程池中运行）"""
+async def query_balance(client: httpx.AsyncClient) -> dict:
+    """查询校园卡余额"""
     try:
-        resp = session.get(INDEX_URL, timeout=REQUEST_TIMEOUT)
+        resp = await client.get(INDEX_URL)
 
         # 提取余额
         balance_match = re.search(
@@ -233,15 +225,10 @@ def _do_query_balance(session: requests.Session) -> dict:
                 "frozen": frozen_match.group(1) if frozen_match else "0.00",
             }
         return {"retcode": -1, "retmsg": "未找到余额信息"}
-    except requests.Timeout:
+    except httpx.TimeoutException:
         return {"retcode": -1, "retmsg": "查询超时"}
     except Exception as e:
         return {"retcode": -1, "retmsg": f"查询失败: {e}"}
-
-
-async def query_balance(session: requests.Session) -> dict:
-    """查询校园卡余额（异步包装）"""
-    return await asyncio.to_thread(_do_query_balance, session)
 
 
 # ─── 处理器 ───────────────────────────────────────────────
@@ -263,24 +250,27 @@ async def handle_campus_card_query(
             "未设置账号，请先私聊发送：\n设置校园卡账号 学号 密码"
         )
 
-    # 登录并获取 session
-    session = await login(account["username"], account["password"])
-    if not session:
+    # 登录并获取客户端
+    client = await login(account["username"], account["password"])
+    if not client:
         await campus_card_query.finish("登录失败，请检查账号密码或验证码")
 
-    # 查询余额
-    result = await query_balance(session)
-    if result.get("retcode") == 0:
-        await campus_card_query.finish(
-            f"💳 校园卡余额\n"
-            f"━━━━━━━━━━━━\n"
-            f"账户余额: ￥{result['balance']}\n"
-            f"冻结余额: ￥{result['frozen']}"
-        )
-    else:
-        await campus_card_query.finish(
-            f"查询失败: {result.get('retmsg', '未知错误')}"
-        )
+    try:
+        # 查询余额
+        result = await query_balance(client)
+        if result.get("retcode") == 0:
+            await campus_card_query.finish(
+                f"💳 校园卡余额\n"
+                f"━━━━━━━━━━━━\n"
+                f"账户余额: ￥{result['balance']}\n"
+                f"冻结余额: ￥{result['frozen']}"
+            )
+        else:
+            await campus_card_query.finish(
+                f"查询失败: {result.get('retmsg', '未知错误')}"
+            )
+    finally:
+        await client.aclose()
 
 
 @campus_card_set.handle()

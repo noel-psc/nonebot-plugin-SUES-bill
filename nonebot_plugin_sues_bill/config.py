@@ -1,7 +1,16 @@
 """SUES 校园服务配置"""
 
-# 基础配置
-BASE_URL = "https://epay.sues.edu.cn"
+from pydantic import BaseModel
+
+
+class Config(BaseModel):
+    """插件配置项"""
+
+    sues_base_url: str = "https://epay.sues.edu.cn"
+    """SUES 一卡通系统地址"""
+
+
+# ─── 以下为内部常量，不可配置 ───────────────────────────────
 
 # 电费查询
 ELECTRIC_QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"

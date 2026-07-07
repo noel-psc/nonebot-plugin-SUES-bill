@@ -1,14 +1,15 @@
 import re
-import asyncio
 
-import requests
-from nonebot import logger, on_command
+import httpx
+from nonebot import get_plugin_config, logger, on_command
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
 
-from .config import BASE_URL, USER_AGENT, ELECTRIC_QUERY_PATH
+from .config import Config, USER_AGENT, ELECTRIC_QUERY_PATH
 from .models import get_user_file, load_user_data, save_user_data
+
+config = get_plugin_config(Config)
 
 # 请求超时（秒）
 REQUEST_TIMEOUT = 10
@@ -55,43 +56,35 @@ BUILD_MAP = {
 }
 
 
-def _do_query_electric_bill(sysid, roomid, areaid, buildid):
-    """查询宿舍电费信息（同步，在线程池中运行）"""
+async def query_electric_bill(
+    sysid: str, roomid: str, areaid: str, buildid: str
+):
+    """查询宿舍电费信息"""
     try:
-        session = requests.Session()
-        headers = {"User-Agent": USER_AGENT}
-        params = {
-            "sysid": sysid,
-            "roomid": roomid,
-            "areaid": areaid,
-            "buildid": buildid,
-        }
-        resp = session.get(
-            BASE_URL + ELECTRIC_QUERY_PATH,
-            params=params,
-            headers=headers,
+        async with httpx.AsyncClient(
+            headers={"User-Agent": USER_AGENT},
             timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        match = re.search(r"(\d+\.?\d*)\s*度", resp.text)
-        if match:
-            return {"retcode": 0, "restElecDegree": float(match.group(1))}
-        return {"retcode": -1, "retmsg": "未找到剩余电量信息"}
-    except requests.Timeout:
+        ) as client:
+            resp = await client.get(
+                config.sues_base_url + ELECTRIC_QUERY_PATH,
+                params={
+                    "sysid": sysid,
+                    "roomid": roomid,
+                    "areaid": areaid,
+                    "buildid": buildid,
+                },
+            )
+            resp.raise_for_status()
+            match = re.search(r"(\d+\.?\d*)\s*度", resp.text)
+            if match:
+                return {"retcode": 0, "restElecDegree": float(match.group(1))}
+            return {"retcode": -1, "retmsg": "未找到剩余电量信息"}
+    except httpx.TimeoutException:
         logger.error("电费查询超时")
         return {"retcode": -1, "retmsg": "查询超时"}
     except Exception as e:
         logger.error(f"电费查询异常: {e}")
         return {"retcode": -1, "retmsg": f"错误: {e}"}
-
-
-async def query_electric_bill(
-    sysid="4", roomid="4021", areaid="101", buildid="13"
-):
-    """查询宿舍电费信息（异步包装）"""
-    return await asyncio.to_thread(
-        _do_query_electric_bill, sysid, roomid, areaid, buildid
-    )
 
 
 electric_query = on_command("电费", priority=5, block=True)
