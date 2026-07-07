@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 
-from nonebot_plugin_localstore import get_plugin_data_file
+from nonebot import require
+
+require("nonebot_plugin_localstore")
+from nonebot_plugin_localstore import get_plugin_data_file  # noqa: E402
 
 DATA_DIR = get_plugin_data_file("").parent
 
