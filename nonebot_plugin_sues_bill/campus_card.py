@@ -20,13 +20,16 @@ from .config import (
     USER_AGENT,
     CAMPUS_CARD_INDEX_PATH,
 )
-from .models import DATA_DIR, load_json, save_json
+from .models import (
+    DATA_DIR,
+    load_campus_card_account,
+    save_campus_card_account,
+)
 
 # 完整 URL
 INDEX_URL = BASE_URL + CAMPUS_CARD_INDEX_PATH
 
-# 账号存储文件
-ACCOUNT_FILE = DATA_DIR / "campus_card_account.json"
+# 加密密钥文件
 KEY_FILE = DATA_DIR / "secret.key"
 
 # 请求超时（秒）
@@ -78,20 +81,19 @@ def _decrypt_password(encrypted: str) -> str:
 # ─── 存储工具 ─────────────────────────────────────────────
 
 
-def load_account() -> dict:
-    """加载校园卡账号"""
-    data = load_json(ACCOUNT_FILE)
+def load_account(user_id: str) -> dict:
+    """加载指定用户的校园卡账号"""
+    data = load_campus_card_account(user_id)
     # 解密密码
     if "password" in data and data["password"].startswith("gAAAAA"):
         data["password"] = _decrypt_password(data["password"])
     return data
 
 
-def save_account(username: str, password: str):
-    """保存校园卡账号（密码加密存储）"""
-    _ensure_dir()
+def save_account(user_id: str, username: str, password: str):
+    """保存指定用户的校园卡账号（密码加密存储）"""
     encrypted = _encrypt_password(password)
-    save_json(ACCOUNT_FILE, {"username": username, "password": encrypted})
+    save_campus_card_account(user_id, username, encrypted)
 
 
 # ─── 工具函数 ─────────────────────────────────────────────
@@ -254,7 +256,8 @@ async def handle_campus_card_query(
     bot: Bot, event: Event, args: Message = CommandArg()
 ):
     """查询校园卡余额"""
-    account = load_account()
+    user_id = str(event.user_id)
+    account = load_account(user_id)
     if not account:
         await campus_card_query.finish(
             "未设置账号，请先私聊发送：\n设置校园卡账号 学号 密码"
@@ -295,7 +298,7 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
     if len(parts) < 2:
         await campus_card_set.finish("格式：设置校园卡账号 学号 密码")
 
-    save_account(parts[0], parts[1])
+    save_account(str(event.user_id), parts[0], parts[1])
     await campus_card_set.finish(f"校园卡账号设置成功！学号: {parts[0]}")
 
 
