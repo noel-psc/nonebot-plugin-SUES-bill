@@ -15,7 +15,7 @@ class Config(BaseSettings):
     des_iv: bytes = b"\x01\x02\x03\x04\x05\x06\x07\x08"
     """DES-CBC 初始向量（8 字节）"""
 
-    model_config = {"env_prefix": "sues_"}
+    model_config = {"env_prefix": "sues_", "extra": "ignore"}
 
 
 # ─── 以下为内部常量，不可配置 ───────────────────────────────
