@@ -247,7 +247,7 @@ async def handle_campus_card_query(
     account = load_account(user_id)
     if not account:
         await campus_card_query.finish(
-            "未设置账号，请先私聊发送：\n设置校园卡账号 学号 密码"
+            "未设置账号，请先私聊发送：\n#设置校园卡账号 学号 密码"
         )
 
     # 登录并获取客户端
@@ -281,12 +281,12 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
 
     arg_text = args.extract_plain_text().strip()
     if not arg_text:
-        await campus_card_set.finish("格式：设置校园卡账号 学号 密码")
+        await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
 
     # 支持密码包含空格
     parts = arg_text.split(maxsplit=1)
     if len(parts) < 2:
-        await campus_card_set.finish("格式：设置校园卡账号 学号 密码")
+        await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
 
     save_account(str(event.user_id), parts[0], parts[1])
     await campus_card_set.finish(f"校园卡账号设置成功！学号: {parts[0]}")
@@ -302,5 +302,5 @@ async def handle_campus_card_help(bot: Bot, event: Event, args: Message = Comman
         "#校园卡 — 查询余额\n"
         "#校园卡帮助 — 查看帮助\n\n"
         "【首次使用】\n"
-        "私聊发送：设置校园卡账号 学号 密码"
+        "私聊发送：#设置校园卡账号 学号 密码"
     )

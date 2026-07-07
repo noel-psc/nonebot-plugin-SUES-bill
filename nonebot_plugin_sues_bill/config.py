@@ -17,7 +17,6 @@ ELECTRIC_QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"
 
 # 校园卡查询
 CAMPUS_CARD_INDEX_PATH = "/epay/h5/index"
-CAMPUS_CARD_LOGIN_PATH = "/epay/person/index"
 
 # DES 加密参数（校园卡登录用）
 DES_KEY = b"6eGicG6U"
