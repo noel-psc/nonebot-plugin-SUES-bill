@@ -2,9 +2,9 @@
 
 import re
 
-import ddddocr
 import httpx
-from nonebot import get_plugin_config, logger, on_command
+import ddddocr
+from nonebot import logger, on_command, get_plugin_config
 from Crypto.Cipher import DES
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
@@ -13,11 +13,10 @@ from cryptography.fernet import Fernet
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import (
-    Config,
-    DES_IV,
-    DES_KEY,
     USER_AGENT,
+    REQUEST_TIMEOUT,
     CAMPUS_CARD_INDEX_PATH,
+    Config,
 )
 from .models import (
     DATA_DIR,
@@ -32,9 +31,6 @@ INDEX_URL = config.sues_base_url + CAMPUS_CARD_INDEX_PATH
 
 # 加密密钥文件
 KEY_FILE = DATA_DIR / "secret.key"
-
-# 请求超时（秒）
-REQUEST_TIMEOUT = 10
 
 # 缓存 ddddocr 实例
 _ocr_instance = None
@@ -113,7 +109,7 @@ def recognize_captcha(image_content: bytes) -> str | None:
 
 def des_encrypt(password: str) -> str:
     """DES-CBC 加密密码（返回 hex 格式）"""
-    cipher = DES.new(DES_KEY, DES.MODE_CBC, DES_IV)
+    cipher = DES.new(config.des_key, DES.MODE_CBC, config.des_iv)
     encrypted = cipher.encrypt(pad(password.encode(), DES.block_size))
     return encrypted.hex()
 
@@ -123,13 +119,13 @@ def des_encrypt(password: str) -> str:
 
 async def login(username: str, password: str) -> httpx.AsyncClient | None:
     """登录校园卡系统，返回已认证的 httpx 客户端"""
+    client = httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT},
+        timeout=REQUEST_TIMEOUT,
+        follow_redirects=True,
+    )
+    success = False
     try:
-        client = httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT,
-            follow_redirects=True,
-        )
-
         # 获取登录页
         resp = await client.get(f"{config.sues_base_url}/epay/person/index")
         resp.raise_for_status()
@@ -164,7 +160,6 @@ async def login(username: str, password: str) -> httpx.AsyncClient | None:
             )
         if not form_match:
             logger.warning("未找到登录表单")
-            await client.aclose()
             return None
 
         form_action = form_match.group(1)
@@ -191,8 +186,8 @@ async def login(username: str, password: str) -> httpx.AsyncClient | None:
         h5_resp = await client.get(INDEX_URL)
         h5_resp.raise_for_status()
         if "账户余额" in h5_resp.text:
+            success = True
             return client
-        await client.aclose()
         return None
     except httpx.TimeoutException:
         logger.error("登录超时")
@@ -200,6 +195,9 @@ async def login(username: str, password: str) -> httpx.AsyncClient | None:
     except Exception as e:
         logger.error(f"登录异常: {e}")
         return None
+    finally:
+        if not success:
+            await client.aclose()
 
 
 # ─── 查询 ─────────────────────────────────────────────────

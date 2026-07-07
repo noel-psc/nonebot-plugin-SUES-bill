@@ -13,4 +13,4 @@ __plugin_meta__ = PluginMetadata(
 )
 
 # 导入各模块以注册命令
-from . import campus_card, electric  # noqa: F401
+from . import electric, campus_card  # noqa: F401

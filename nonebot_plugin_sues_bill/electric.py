@@ -1,18 +1,15 @@
 import re
 
 import httpx
-from nonebot import get_plugin_config, logger, on_command
+from nonebot import logger, on_command, get_plugin_config
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
 
-from .config import Config, USER_AGENT, ELECTRIC_QUERY_PATH
+from .config import USER_AGENT, REQUEST_TIMEOUT, ELECTRIC_QUERY_PATH, Config
 from .models import get_user_file, load_user_data, save_user_data
 
 config = get_plugin_config(Config)
-
-# 请求超时（秒）
-REQUEST_TIMEOUT = 10
 
 AREA_MAP = {
     "三期": ("4", "101"),
@@ -104,7 +101,7 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
         parts = arg_text.split()
         if len(parts) < 3:
             await electric_query.finish(
-                "格式：#电费 区域 楼栋 房间号\n例：#电费 三期 21 4021"
+                "格式：#电费 区域 楼栋 房间号\n例：#电费 三期 21 1001"
             )
         area_name, build_num, room_id = parts[0], parts[1], parts[2]
         if area_name not in AREA_MAP:
@@ -114,7 +111,7 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
         if (area_name, build_num) not in BUILD_MAP:
             await electric_query.finish(f"{area_name}没有{build_num}栋")
         if not room_id.isdigit() or len(room_id) != 4:
-            await electric_query.finish("房间号应为4位数字，如4021")
+            await electric_query.finish("房间号应为4位数字，如1001")
         sysid, areaid = AREA_MAP[area_name]
         query_params = {
             "sysid": sysid,
@@ -125,7 +122,7 @@ async def handle_electric_query(bot: Bot, event: Event, args: Message = CommandA
     else:
         if "query_params" not in data:
             await electric_query.finish(
-                "格式：#电费 区域 楼栋 房间号\n例：#电费 三期 21 4021"
+                "格式：#电费 区域 楼栋 房间号\n例：#电费 三期 21 1001"
             )
         query_params = data["query_params"]
 
@@ -151,7 +148,8 @@ async def handle_electric_raw(bot: Bot, event: Event, args: Message = CommandArg
     result = await query_electric_bill(*parts[:4])
     if result.get("retcode") == 0:
         await electric_raw.finish(f"剩余电量: {result['restElecDegree']} 度")
-    await electric_raw.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
+    else:
+        await electric_raw.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
 
 
 @electric_help.handle()
@@ -164,7 +162,7 @@ async def handle_electric_help(bot: Bot, event: Event, args: Message = CommandAr
         "#电费（使用上次保存的参数）\n"
         "#清除电费设置\n\n"
         "【示例】\n"
-        "#电费 三期 21 4021\n"
+        "#电费 三期 21 1001\n"
         "#电费 四期 28 1021\n\n"
         "【支持的区域和楼栋】\n"
         "三期：10-26栋\n"
@@ -181,7 +179,7 @@ async def handle_electric_help_detail(
         "📖 电费原始查询帮助\n"
         "━━━━━━━━━━━━\n\n"
         "格式：#电费原始 系统ID 房间号 区域ID 楼栋ID\n"
-        "例：#电费原始 4 4021 101 13\n\n"
+        "例：#电费原始 4 1001 101 13\n\n"
         "【系统ID】\n"
         "3 = 后勤部综合楼\n"
         "4 = 上海工程技术大学电控充值\n\n"
