@@ -103,5 +103,5 @@
 
 ### Fix
 
-- add explict type conversion at func recognize_captcha
+- add explicit type conversion at func recognize_captcha
 - Fix capitalization in plugin name and commands

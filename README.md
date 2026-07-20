@@ -5,7 +5,7 @@
 ## ✨ nonebot-plugin-sues-bill ✨
 [![LICENSE](https://img.shields.io/github/license/noel-psc/nonebot-plugin-sues-bill.svg)](./LICENSE)
 [![pypi](https://img.shields.io/pypi/v/nonebot-plugin-sues-bill.svg)](https://pypi.python.org/pypi/nonebot-plugin-sues-bill)
-[![python](https://img.shields.io/badge/python-3.10|3.11|3.12|3.13-blue.svg)](https://www.python.org)
+[![python](https://img.shields.io/badge/python-3.11|3.12|3.13|3.14-blue.svg)](https://www.python.org)
 [![uv](https://img.shields.io/badge/package%20manager-uv-black?style=flat-square&logo=uv)](https://github.com/astral-sh/uv)
 <br/>
 [![ruff](https://img.shields.io/badge/code%20style-ruff-black?style=flat-square&logo=ruff)](https://github.com/astral-sh/ruff)
@@ -19,6 +19,7 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
 
 主要功能：
 - 🔌 **电费查询** — 查询宿舍剩余电量，支持记忆上次查询参数
+- 📊 **昨日耗电** — 自动结算昨日耗电量与电费，支持缴费流水校正
 - 💳 **校园卡查询** — 查询校园卡账户余额和冻结余额
 
 ## 💿 安装
@@ -97,6 +98,7 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
 | 配置项  | 必填  | 默认值 |   说明   |
 | :-----: | :---: | :----: | :------: |
 | sues_base_url | 否 | `https://epay.sues.edu.cn` | SUES 一卡通系统地址 |
+| sues_electricity_price_per_kwh | 否 | `0.617` | 每度电价格（元），用于计算昨日电费 |
 
 ## 🎉 使用
 ### 指令表
@@ -107,6 +109,7 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
 | :---: | :---: | :---: | :---: | :------: |
 | #电费 | 群员 | 否 | 私聊/群聊 | 查询宿舍电费（使用上次保存的参数） |
 | #电费 区域 楼栋 房间号 | 群员 | 否 | 私聊/群聊 | 查询指定宿舍电费 |
+| #昨日耗电 | 群员 | 否 | 私聊/群聊 | 查询昨日耗电量与电费 |
 | #电费帮助 | 群员 | 否 | 私聊/群聊 | 查看电费查询帮助 |
 | #电费详细帮助 | 群员 | 否 | 私聊/群聊 | 查看详细参数说明 |
 | #清除电费设置 | 群员 | 否 | 私聊/群聊 | 清除保存的查询参数 |
@@ -124,6 +127,17 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
 ```
 </details>
 
+#### 昨日耗电
+
+首次成功执行 `#电费` 后，插件会保存该用户的宿舍参数。每天会在上海时区 00:00 前后十分钟内，为已保存参数的用户错峰查询一次剩余电量，并结算前一自然日的耗电量和电费。
+
+- 已私聊设置校园卡账号的用户：插件会读取当天成功的“电费缴费”流水，按 `昨日 00:00 余额 + 缴费购电量 - 今日 00:00 余额` 校正耗电量。
+- 未设置校园卡账号的用户：按两次余额差显示估算值；若发现余额增加，会提示当天可能发生缴费，无法准确计算。
+- 首次记录需要等待两个日界快照后才能得到昨日耗电。
+- 为降低对学校系统的集中访问，日界采样会有最多十分钟的边界误差。
+
+数据保存在 nonebot-plugin-localstore 的插件专属目录。旧版本若曾将数据保存到全局 `data/`，升级后会在首次访问时自动迁移用户配置及加密密钥。
+
 #### 校园卡查询
 
 | 指令  | 权限  | 需要@ | 范围  |   说明   |
@@ -139,6 +153,12 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
 **电费查询**：
 ```
 剩余电量: 128.5 度
+```
+
+**昨日耗电**：
+```
+昨日耗电：2.5 度
+昨日电费：1.54 元
 ```
 
 **校园卡查询**：

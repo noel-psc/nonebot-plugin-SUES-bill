@@ -1,6 +1,9 @@
 """校园卡余额查询模块"""
 
 import re
+import asyncio
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 import ddddocr
@@ -10,10 +13,12 @@ from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from Crypto.Util.Padding import pad
 from cryptography.fernet import Fernet
-from nonebot.adapters.onebot.v11 import Bot, Event
+from nonebot.adapters.onebot.v11 import Bot, Event, PrivateMessageEvent
 
 from .config import (
     USER_AGENT,
+    BILL_LOAD_PATH,
+    BILL_PAGE_PATH,
     REQUEST_TIMEOUT,
     CAMPUS_CARD_INDEX_PATH,
     Config,
@@ -25,6 +30,7 @@ from .models import (
 )
 
 config = get_plugin_config(Config)
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 # 完整 URL
 INDEX_URL = config.sues_base_url + CAMPUS_CARD_INDEX_PATH
@@ -101,7 +107,7 @@ def recognize_captcha(image_content: bytes) -> str | None:
     try:
         ocr = _get_ocr()
         result = ocr.classification(image_content)
-        return result if result else None
+        return result if isinstance(result, str) and result else None
     except Exception as e:
         logger.error(f"验证码识别失败: {e}")
         return None
@@ -131,17 +137,13 @@ async def login(username: str, password: str) -> httpx.AsyncClient | None:
         resp.raise_for_status()
 
         # 提取 CSRF token
-        csrf_match = re.search(
-            r'<meta name="_csrf" content="([^"]+)"/>', resp.text
-        )
+        csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"/>', resp.text)
         csrf_token = csrf_match.group(1) if csrf_match else ""
         if not csrf_token:
             logger.warning("未找到 CSRF token")
 
         # 提取验证码并识别
-        captcha_match = re.search(
-            r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text
-        )
+        captcha_match = re.search(r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text)
         captcha = None
         if captcha_match:
             captcha_url = captcha_match.group(1)
@@ -209,12 +211,8 @@ async def query_balance(client: httpx.AsyncClient) -> dict:
         resp = await client.get(INDEX_URL)
 
         # 提取余额
-        balance_match = re.search(
-            r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL
-        )
-        frozen_match = re.search(
-            r"冻结余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL
-        )
+        balance_match = re.search(r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
+        frozen_match = re.search(r"冻结余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
 
         if balance_match:
             return {
@@ -229,6 +227,54 @@ async def query_balance(client: httpx.AsyncClient) -> dict:
         return {"retcode": -1, "retmsg": f"查询失败: {e}"}
 
 
+async def query_electric_payment_amount(
+    client: httpx.AsyncClient, target_date: date
+) -> dict:
+    """查询指定自然日内成功的电费缴费金额。"""
+
+    async def load_page(page_no: int) -> dict:
+        resp = await client.get(
+            config.sues_base_url + BILL_LOAD_PATH,
+            params={"pageno": page_no},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    try:
+        bill_page = await client.get(config.sues_base_url + BILL_PAGE_PATH)
+        bill_page.raise_for_status()
+        first_page = await load_page(1)
+        if first_page.get("retcode") != 0:
+            return {"retcode": -1, "retmsg": first_page.get("retmsg", "账单查询失败")}
+
+        total_pages = max(int(first_page.get("totalpage", 1)), 1)
+        other_pages = await asyncio.gather(
+            *(load_page(page_no) for page_no in range(2, total_pages + 1))
+        )
+        records = list(first_page.get("dtls", []))
+        for page in other_pages:
+            if page.get("retcode") == 0:
+                records.extend(page.get("dtls", []))
+
+        amount = 0.0
+        for record in records:
+            is_successful_electricity_payment = (
+                record.get("tradename") == "电费缴费"
+                and int(record.get("status", -1)) == 2
+            )
+            if not is_successful_electricity_payment:
+                continue
+            created_at = datetime.fromtimestamp(
+                float(record["createtime"]) / 1000, tz=SHANGHAI_TZ
+            )
+            if created_at.date() == target_date:
+                amount += float(record["amount"])
+        return {"retcode": 0, "amount": round(amount, 2)}
+    except (KeyError, TypeError, ValueError, httpx.HTTPError) as e:
+        logger.error(f"缴费记录查询失败: {e}")
+        return {"retcode": -1, "retmsg": "缴费记录查询失败"}
+
+
 # ─── 处理器 ───────────────────────────────────────────────
 
 campus_card_query = on_command("校园卡", priority=5, block=True)
@@ -241,7 +287,7 @@ async def handle_campus_card_query(
     bot: Bot, event: Event, args: Message = CommandArg()
 ):
     """查询校园卡余额"""
-    user_id = str(event.user_id)
+    user_id = event.get_user_id()
     account = load_account(user_id)
     if not account:
         await campus_card_query.finish(
@@ -274,7 +320,7 @@ async def handle_campus_card_query(
 @campus_card_set.handle()
 async def handle_campus_card_set(bot: Bot, event: Event, args: Message = CommandArg()):
     """设置校园卡账号（仅私聊）"""
-    if event.message_type != "private":
+    if not isinstance(event, PrivateMessageEvent):
         await campus_card_set.finish("请私聊机器人设置账号")
 
     arg_text = args.extract_plain_text().strip()
@@ -286,7 +332,7 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
     if len(parts) < 2:
         await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
 
-    save_account(str(event.user_id), parts[0], parts[1])
+    save_account(event.get_user_id(), parts[0], parts[1])
     await campus_card_set.finish(f"校园卡账号设置成功！学号: {parts[0]}")
 
 
