@@ -1,9 +1,9 @@
 [project]
 name = "nonebot-plugin-sues-bill"
-version = "1.0.6"
+version = "1.0.7"
 description = "查询sues账单"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "noel-psc", email = "noel-psc@gmail.com" }]
 dependencies = [
   "nonebot2>=2.4.3,<3.0.0",
@@ -47,7 +47,7 @@ nonebug = { git = "https://github.com/nonebot/nonebug" }
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.0.6"
+version = "1.0.7"
 tag_format = "v$version"
 update_changelog_on_bump = true
 version_files = [
@@ -73,7 +73,7 @@ changelog = "cz changelog"
 commit = "cz commit"
 
 [tool.pyright]
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 pythonPlatform = "All"
 defineConstant = { PYDANTIC_V2 = true }
 executionEnvironments = [

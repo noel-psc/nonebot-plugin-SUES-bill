@@ -13,7 +13,7 @@ from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from Crypto.Util.Padding import pad
 from cryptography.fernet import Fernet
-from nonebot.adapters.onebot.v11 import Bot, Event
+from nonebot.adapters.onebot.v11 import Bot, Event, PrivateMessageEvent
 
 from .config import (
     USER_AGENT,
@@ -107,7 +107,7 @@ def recognize_captcha(image_content: bytes) -> str | None:
     try:
         ocr = _get_ocr()
         result = ocr.classification(image_content)
-        return result if result else None
+        return result if isinstance(result, str) and result else None
     except Exception as e:
         logger.error(f"验证码识别失败: {e}")
         return None
@@ -287,7 +287,7 @@ async def handle_campus_card_query(
     bot: Bot, event: Event, args: Message = CommandArg()
 ):
     """查询校园卡余额"""
-    user_id = str(event.user_id)
+    user_id = event.get_user_id()
     account = load_account(user_id)
     if not account:
         await campus_card_query.finish(
@@ -320,7 +320,7 @@ async def handle_campus_card_query(
 @campus_card_set.handle()
 async def handle_campus_card_set(bot: Bot, event: Event, args: Message = CommandArg()):
     """设置校园卡账号（仅私聊）"""
-    if event.message_type != "private":
+    if not isinstance(event, PrivateMessageEvent):
         await campus_card_set.finish("请私聊机器人设置账号")
 
     arg_text = args.extract_plain_text().strip()
@@ -332,7 +332,7 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
     if len(parts) < 2:
         await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
 
-    save_account(str(event.user_id), parts[0], parts[1])
+    save_account(event.get_user_id(), parts[0], parts[1])
     await campus_card_set.finish(f"校园卡账号设置成功！学号: {parts[0]}")
 
 
