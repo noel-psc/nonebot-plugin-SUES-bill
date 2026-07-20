@@ -27,6 +27,7 @@ from .models import (
     DATA_DIR,
     load_campus_card_account,
     save_campus_card_account,
+    get_bound_accounts_for_room,
 )
 
 config = get_plugin_config(Config)
@@ -93,10 +94,21 @@ def load_account(user_id: str) -> dict:
     return data
 
 
-def save_account(user_id: str, username: str, password: str):
+def load_bound_accounts(room_id: int) -> list[dict[str, str]]:
+    """Load decrypted accounts explicitly bound to a room for daily settlement."""
+    accounts = []
+    for account in get_bound_accounts_for_room(room_id):
+        encrypted_password = account["password"]
+        if encrypted_password.startswith("gAAAAA"):
+            account["password"] = _decrypt_password(encrypted_password)
+        accounts.append(account)
+    return accounts
+
+
+def save_account(user_id: str, username: str, password: str) -> bool:
     """保存指定用户的校园卡账号（密码加密存储）"""
     encrypted = _encrypt_password(password)
-    save_campus_card_account(user_id, username, encrypted)
+    return save_campus_card_account(user_id, username, encrypted)
 
 
 # ─── 工具函数 ─────────────────────────────────────────────
@@ -332,7 +344,8 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
     if len(parts) < 2:
         await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
 
-    save_account(event.get_user_id(), parts[0], parts[1])
+    if not save_account(event.get_user_id(), parts[0], parts[1]):
+        await campus_card_set.finish("该校园卡账号已由其他用户设置，不能重复绑定")
     await campus_card_set.finish(f"校园卡账号设置成功！学号: {parts[0]}")
 
 
