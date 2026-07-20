@@ -1,3 +1,9 @@
+## v1.1.1 (2026-07-21)
+
+### Fix
+
+- query the current electricity balance by default and persist room readings
+
 ## v1.1.0 (2026-07-21)
 
 ### Feat
