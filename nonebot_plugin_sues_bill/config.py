@@ -15,6 +15,9 @@ class Config(BaseSettings):
     des_iv: bytes = b"\x01\x02\x03\x04\x05\x06\x07\x08"
     """DES-CBC 初始向量（8 字节）"""
 
+    electricity_price_per_kwh: float = 0.617
+    """宿舍电价（元/度），用于计算昨日耗电费用"""
+
     model_config = {"env_prefix": "sues_", "extra": "ignore"}
 
 
@@ -25,6 +28,10 @@ REQUEST_TIMEOUT = 10
 
 # 电费查询
 ELECTRIC_QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"
+
+# 缴费账单
+BILL_PAGE_PATH = "/epay/h5/bill"
+BILL_LOAD_PATH = "/epay/h5/loadbill.json"
 
 # 校园卡查询
 CAMPUS_CARD_INDEX_PATH = "/epay/h5/index"

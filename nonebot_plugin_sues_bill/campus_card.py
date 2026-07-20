@@ -1,6 +1,9 @@
 """校园卡余额查询模块"""
 
 import re
+import asyncio
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 import ddddocr
@@ -14,6 +17,8 @@ from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import (
     USER_AGENT,
+    BILL_LOAD_PATH,
+    BILL_PAGE_PATH,
     REQUEST_TIMEOUT,
     CAMPUS_CARD_INDEX_PATH,
     Config,
@@ -25,6 +30,7 @@ from .models import (
 )
 
 config = get_plugin_config(Config)
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 # 完整 URL
 INDEX_URL = config.sues_base_url + CAMPUS_CARD_INDEX_PATH
@@ -227,6 +233,54 @@ async def query_balance(client: httpx.AsyncClient) -> dict:
         return {"retcode": -1, "retmsg": "查询超时"}
     except Exception as e:
         return {"retcode": -1, "retmsg": f"查询失败: {e}"}
+
+
+async def query_electric_payment_amount(
+    client: httpx.AsyncClient, target_date: date
+) -> dict:
+    """查询指定自然日内成功的电费缴费金额。"""
+
+    async def load_page(page_no: int) -> dict:
+        resp = await client.get(
+            config.sues_base_url + BILL_LOAD_PATH,
+            params={"pageno": page_no},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    try:
+        bill_page = await client.get(config.sues_base_url + BILL_PAGE_PATH)
+        bill_page.raise_for_status()
+        first_page = await load_page(1)
+        if first_page.get("retcode") != 0:
+            return {"retcode": -1, "retmsg": first_page.get("retmsg", "账单查询失败")}
+
+        total_pages = max(int(first_page.get("totalpage", 1)), 1)
+        other_pages = await asyncio.gather(
+            *(load_page(page_no) for page_no in range(2, total_pages + 1))
+        )
+        records = list(first_page.get("dtls", []))
+        for page in other_pages:
+            if page.get("retcode") == 0:
+                records.extend(page.get("dtls", []))
+
+        amount = 0.0
+        for record in records:
+            is_successful_electricity_payment = (
+                record.get("tradename") == "电费缴费"
+                and int(record.get("status", -1)) == 2
+            )
+            if not is_successful_electricity_payment:
+                continue
+            created_at = datetime.fromtimestamp(
+                float(record["createtime"]) / 1000, tz=SHANGHAI_TZ
+            )
+            if created_at.date() == target_date:
+                amount += float(record["amount"])
+        return {"retcode": 0, "amount": round(amount, 2)}
+    except (KeyError, TypeError, ValueError, httpx.HTTPError) as e:
+        logger.error(f"缴费记录查询失败: {e}")
+        return {"retcode": -1, "retmsg": "缴费记录查询失败"}
 
 
 # ─── 处理器 ───────────────────────────────────────────────

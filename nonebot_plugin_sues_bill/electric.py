@@ -1,15 +1,36 @@
 import re
+import asyncio
+from hashlib import sha256
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
-from nonebot import logger, on_command, get_plugin_config
+from nonebot import logger, require, on_command, get_plugin_config
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import USER_AGENT, REQUEST_TIMEOUT, ELECTRIC_QUERY_PATH, Config
-from .models import get_user_file, load_user_data, save_user_data
+from .models import (
+    get_user_file,
+    load_user_data,
+    save_user_data,
+    get_electricity_user_ids,
+    save_electricity_daily_snapshot,
+)
+from .campus_card import (
+    login,
+    load_account,
+    query_electric_payment_amount,
+)
+
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
 config = get_plugin_config(Config)
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+MAX_SCHEDULED_QUERIES = 10
+SETTLEMENT_WINDOW_SECONDS = 20 * 60
 
 AREA_MAP = {
     "三期": ("4", "101"),
@@ -89,6 +110,103 @@ electric_raw = on_command("电费原始", priority=5, block=True)
 electric_help = on_command("电费帮助", priority=5, block=True)
 electric_help_detail = on_command("电费详细帮助", priority=5, block=True)
 electric_clear = on_command("清除电费设置", priority=5, block=True)
+electric_yesterday_usage = on_command("昨日耗电", priority=5, block=True)
+
+
+def get_settlement_delay_seconds(user_id: str) -> int:
+    """为用户分配稳定的 23:50 至 00:10 错峰时段。"""
+    digest = sha256(user_id.encode()).digest()
+    return int.from_bytes(digest[:4], "big") % (SETTLEMENT_WINDOW_SECONDS + 1)
+
+
+async def settle_user_electricity(user_id: str, snapshot_date: date):
+    """在日界采样指定用户的电量，并结算前一自然日。"""
+    data = await asyncio.to_thread(load_user_data, user_id)
+    query_params = data.get("query_params")
+    if not query_params:
+        return
+
+    result = await query_electric_bill(**query_params)
+    if result.get("retcode") != 0:
+        logger.warning(f"用户 {user_id} 的日界电费查询失败")
+        return
+
+    payment_amount_yuan = None
+    account = await asyncio.to_thread(load_account, user_id)
+    if account:
+        client = await login(account["username"], account["password"])
+        if client:
+            try:
+                payment_result = await query_electric_payment_amount(
+                    client, snapshot_date - timedelta(days=1)
+                )
+                if payment_result.get("retcode") == 0:
+                    payment_amount_yuan = payment_result["amount"]
+            finally:
+                await client.aclose()
+
+    save_electricity_daily_snapshot(
+        data,
+        snapshot_date=snapshot_date,
+        query_params=query_params,
+        remaining_kwh=result["restElecDegree"],
+        payment_amount_yuan=payment_amount_yuan,
+        price_per_kwh=config.electricity_price_per_kwh,
+    )
+    await asyncio.to_thread(save_user_data, user_id, data)
+
+
+@scheduler.scheduled_job(
+    "cron", hour=23, minute=50, timezone="Asia/Shanghai", id="sues_daily_electricity"
+)
+async def settle_daily_electricity():
+    """在每日 00:00 前后十分钟错峰创建日界快照。"""
+    snapshot_date = (datetime.now(SHANGHAI_TZ) + timedelta(minutes=10)).date()
+    user_ids = await asyncio.to_thread(get_electricity_user_ids)
+
+    semaphore = asyncio.Semaphore(MAX_SCHEDULED_QUERIES)
+
+    async def settle_with_limit(user_id: str):
+        await asyncio.sleep(get_settlement_delay_seconds(user_id))
+        async with semaphore:
+            await settle_user_electricity(user_id, snapshot_date)
+
+    await asyncio.gather(
+        *(settle_with_limit(user_id) for user_id in user_ids),
+        return_exceptions=True,
+    )
+
+
+@electric_yesterday_usage.handle()
+async def handle_electric_yesterday_usage(
+    bot: Bot, event: Event, args: Message = CommandArg()
+):
+    """展示由日界快照结算得到的昨日耗电。"""
+    user_id = event.get_user_id()
+    yesterday = (datetime.now(SHANGHAI_TZ) - timedelta(days=1)).date().isoformat()
+    daily = load_user_data(user_id).get("electricity_usage", {}).get("daily", {})
+    record = daily.get(yesterday)
+    if not record:
+        await electric_yesterday_usage.finish(
+            "暂无昨日耗电记录。请先使用 #电费 保存宿舍，"
+            "系统会在每日 00:00 前后自动采样。"
+        )
+
+    status = record.get("status")
+    if status == "estimated_recharge_detected":
+        await electric_yesterday_usage.finish(
+            "⚠️ 昨日剩余电量增加，可能发生电费缴费；未绑定校园卡，无法准确计算昨日耗电。"
+        )
+    if status == "calculation_error":
+        await electric_yesterday_usage.finish(
+            "⚠️ 昨日耗电数据校验失败，请检查校园卡缴费记录后等待下一次日结。"
+        )
+
+    prefix = "⚠️ 估算值（缴费记录不可用）\n" if status == "estimated" else ""
+    await electric_yesterday_usage.finish(
+        f"{prefix}昨日耗电：{record['consumed_kwh']} 度\n"
+        f"昨日电费：{record['cost_yuan']:.2f} 元"
+    )
 
 
 @electric_query.handle()
@@ -160,10 +278,14 @@ async def handle_electric_help(bot: Bot, event: Event, args: Message = CommandAr
         "【使用方式】\n"
         "#电费 区域 楼栋 房间号\n"
         "#电费（使用上次保存的参数）\n"
+        "#昨日耗电\n"
         "#清除电费设置\n\n"
         "【示例】\n"
         "#电费 三期 21 1001\n"
         "#电费 四期 28 1021\n\n"
+        "【昨日耗电】\n"
+        "系统会在每日 00:00 前后十分钟错峰结算；"
+        "设置校园卡账号后可自动校正当天缴费。\n\n"
         "【支持的区域和楼栋】\n"
         "三期：10-26栋\n"
         "四期：20、21、23、24、27-30、33-36、39-42栋\n\n"
