@@ -1,3 +1,10 @@
+## v1.1.0 (2026-07-21)
+
+### Feat
+
+- add SQLite-backed electricity usage history and daily settlement
+- add electricity record settings, payment-account binding, and period statistics
+
 ## v1.0.6 (2026-07-07)
 
 ### Fix
