@@ -18,6 +18,7 @@ from .models import (
     set_room_subscription,
     stop_room_subscription,
     record_electricity_query,
+    get_today_reading_estimate,
     bind_account_to_subscription,
     subscription_has_bound_account,
     save_electricity_daily_snapshot,
@@ -231,7 +232,8 @@ def record_help() -> str:
     return (
         "电费记录命令\n\n"
         "#电费 记录 区域 楼栋 房间号\n"
-        "#电费 统计 [天数]\n"
+        "#电费 统计 0（今日截至当前估算）\n"
+        "#电费 统计 [天数]（已结束自然日）\n"
         "#电费 记录 状态 / 停止\n"
         "#电费 记录 绑定 / 解绑"
     )
@@ -302,6 +304,29 @@ async def show_statistics(user_id: str, days: int) -> str:
     subscription = await asyncio.to_thread(get_room_subscription, user_id)
     if subscription is None:
         return "未设置记录宿舍，请先发送：#电费 记录 三期 21 1001"
+    if days == 0:
+        estimate = await asyncio.to_thread(
+            get_today_reading_estimate,
+            subscription["room_id"],
+            datetime.now(SHANGHAI_TZ).date(),
+            config.electricity_price_per_kwh,
+        )
+        if estimate["status"] == "insufficient_readings":
+            return (
+                f"{describe_room(subscription)}今日截至当前暂无可估算的耗电记录。\n"
+                f"今日已记录 {estimate['reading_count']} 次，至少需要两次成功查询。"
+            )
+        if estimate["status"] == "recharge_unverified":
+            return (
+                f"{describe_room(subscription)}今日截至当前无法估算耗电。\n"
+                "检测到余额增加，今日可能已缴费。"
+            )
+        return (
+            f"{describe_room(subscription)}今日截至当前耗电（估算）\n"
+            f"耗电：{estimate['consumed_kwh']} 度\n"
+            f"电费：{estimate['cost_yuan']:.2f} 元\n"
+            "按今日首次和最新查询余额计算；缴费后可能不准确。"
+        )
     statistics = await asyncio.to_thread(
         get_usage_statistics,
         subscription["room_id"],
@@ -344,8 +369,8 @@ async def handle_electric_query(
         arguments = arg_text.removeprefix("记录").strip()
         await electric_query.finish(await handle_record_command(user_id, arguments))
     elif (days := parse_statistics_days(arg_text)) is not None:
-        if not 1 <= days <= MAX_STATISTICS_DAYS:
-            await electric_query.finish(f"统计天数应在 1 到 {MAX_STATISTICS_DAYS} 之间")
+        if not 0 <= days <= MAX_STATISTICS_DAYS:
+            await electric_query.finish(f"统计天数应为 0 或 1 到 {MAX_STATISTICS_DAYS}")
         await electric_query.finish(await show_statistics(user_id, days))
     else:
         query_params, error = parse_room_params(arg_text)

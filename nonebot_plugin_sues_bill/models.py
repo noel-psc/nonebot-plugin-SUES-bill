@@ -2,7 +2,8 @@ import json
 import sqlite3
 from typing import Any
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import UTC, date, time, datetime, timedelta
+from zoneinfo import ZoneInfo
 from contextlib import contextmanager
 from collections.abc import Iterator
 
@@ -16,6 +17,7 @@ from nonebot_plugin_localstore import get_plugin_data_file
 DATA_DIR = get_plugin_data_file("")
 LEGACY_DATA_DIR = DATA_DIR.parent
 DB_FILE_NAME = "sues_bill.sqlite3"
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 PLUGIN_USER_DATA_KEYS = frozenset(
     {"campus_card_account", "query_params", "electricity_usage"}
 )
@@ -514,6 +516,61 @@ def get_room_readings(room_id: int) -> list[dict[str, Any]]:
             (room_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_today_reading_estimate(
+    room_id: int, target_date: date, price_per_kwh: float
+) -> dict[str, Any]:
+    """Estimate today's usage from the first and latest Shanghai-day readings."""
+    initialize_database()
+    start = datetime.combine(target_date, time.min, SHANGHAI_TZ).astimezone(UTC)
+    end = datetime.combine(
+        target_date + timedelta(days=1), time.min, SHANGHAI_TZ
+    ).astimezone(UTC)
+    bounds = tuple(moment.strftime("%Y-%m-%d %H:%M:%S") for moment in (start, end))
+    with _connection() as connection:
+        first = connection.execute(
+            """
+            SELECT remaining_kwh
+            FROM room_readings
+            WHERE room_id = ? AND queried_at >= ? AND queried_at < ?
+            ORDER BY queried_at, id
+            LIMIT 1
+            """,
+            (room_id, *bounds),
+        ).fetchone()
+        latest = connection.execute(
+            """
+            SELECT remaining_kwh
+            FROM room_readings
+            WHERE room_id = ? AND queried_at >= ? AND queried_at < ?
+            ORDER BY queried_at DESC, id DESC
+            LIMIT 1
+            """,
+            (room_id, *bounds),
+        ).fetchone()
+        reading_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM room_readings
+                WHERE room_id = ? AND queried_at >= ? AND queried_at < ?
+                """,
+                (room_id, *bounds),
+            ).fetchone()[0]
+        )
+
+    if reading_count < 2 or first is None or latest is None:
+        return {"status": "insufficient_readings", "reading_count": reading_count}
+
+    consumed_kwh = float(first["remaining_kwh"]) - float(latest["remaining_kwh"])
+    if consumed_kwh < -0.001:
+        return {"status": "recharge_unverified"}
+    consumed_kwh = max(consumed_kwh, 0)
+    return {
+        "status": "estimated",
+        "consumed_kwh": round(consumed_kwh, 3),
+        "cost_yuan": round(consumed_kwh * price_per_kwh, 2),
+    }
 
 
 def save_electricity_daily_snapshot(

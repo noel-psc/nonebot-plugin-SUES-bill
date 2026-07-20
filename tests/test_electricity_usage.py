@@ -8,6 +8,7 @@ QUERY_PARAMS = {
     "areaid": "101",
     "buildid": "13",
 }
+PRICE_PER_KWH = 0.617
 
 
 @pytest.fixture
@@ -30,14 +31,14 @@ def test_daily_usage_is_corrected_by_electricity_payment(room_id):
         snapshot_date=date(2026, 7, 19),
         remaining_kwh=20,
         payment_amount_yuan=0,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
     record = save_electricity_daily_snapshot(
         room_id,
         snapshot_date=date(2026, 7, 20),
         remaining_kwh=18,
         payment_amount_yuan=6.17,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
 
     assert record == {
@@ -56,14 +57,14 @@ def test_daily_usage_is_estimated_without_payment_history(room_id):
         snapshot_date=date(2026, 7, 19),
         remaining_kwh=20,
         payment_amount_yuan=None,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
     record = save_electricity_daily_snapshot(
         room_id,
         snapshot_date=date(2026, 7, 20),
         remaining_kwh=18,
         payment_amount_yuan=None,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
 
     assert record == {
@@ -84,14 +85,14 @@ def test_balance_increase_is_not_included_in_statistics(room_id):
         snapshot_date=date(2026, 7, 19),
         remaining_kwh=20,
         payment_amount_yuan=None,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
     record = save_electricity_daily_snapshot(
         room_id,
         snapshot_date=date(2026, 7, 20),
         remaining_kwh=25,
         payment_amount_yuan=None,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
 
     assert record == {"status": "recharge_unverified"}
@@ -111,21 +112,21 @@ def test_statistics_returns_highest_usage_day(room_id):
         snapshot_date=date(2026, 7, 17),
         remaining_kwh=20,
         payment_amount_yuan=None,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
     save_electricity_daily_snapshot(
         room_id,
         snapshot_date=date(2026, 7, 18),
         remaining_kwh=18,
         payment_amount_yuan=None,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
     save_electricity_daily_snapshot(
         room_id,
         snapshot_date=date(2026, 7, 19),
         remaining_kwh=13,
         payment_amount_yuan=None,
-        price_per_kwh=0.617,
+        price_per_kwh=PRICE_PER_KWH,
     )
 
     statistics = get_usage_statistics(room_id, 30, date(2026, 7, 20))
@@ -149,6 +150,7 @@ def test_record_statistics_accepts_compact_and_spaced_days():
     assert parse_statistics_days("统计 30天") == 30
     assert parse_statistics_days("统计7天") == 7
     assert parse_statistics_days("统计 7") == 7
+    assert parse_statistics_days("统计 0") == 0
     assert parse_statistics_days("统计") == 30
     assert parse_statistics_days("查看") is None
 
@@ -163,3 +165,91 @@ def test_successful_queries_are_stored_without_daily_snapshot(monkeypatch, tmp_p
 
     queries = models.get_room_readings(room_id)
     assert [query["remaining_kwh"] for query in queries] == [18.5, 20.0]
+
+
+def test_today_usage_is_estimated_from_first_and_latest_reading(room_id):
+    from nonebot_plugin_sues_bill import models
+
+    with models._connection() as connection:
+        connection.executemany(
+            """
+            INSERT INTO room_readings(room_id, queried_at, remaining_kwh)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (room_id, "2026-07-19 16:10:00", 20),
+                (room_id, "2026-07-20 04:00:00", 18.5),
+                (room_id, "2026-07-20 15:50:00", 17),
+            ],
+        )
+
+    estimate = models.get_today_reading_estimate(
+        room_id, date(2026, 7, 20), PRICE_PER_KWH
+    )
+
+    assert estimate == {
+        "status": "estimated",
+        "consumed_kwh": 3.0,
+        "cost_yuan": 1.85,
+    }
+
+
+def test_today_usage_requires_two_readings(room_id):
+    from nonebot_plugin_sues_bill import models
+
+    with models._connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO room_readings(room_id, queried_at, remaining_kwh)
+            VALUES (?, ?, ?)
+            """,
+            (room_id, "2026-07-20 04:00:00", 20),
+        )
+
+    estimate = models.get_today_reading_estimate(
+        room_id, date(2026, 7, 20), PRICE_PER_KWH
+    )
+
+    assert estimate == {"status": "insufficient_readings", "reading_count": 1}
+
+
+def test_today_usage_reports_unverified_recharge(room_id):
+    from nonebot_plugin_sues_bill import models
+
+    with models._connection() as connection:
+        connection.executemany(
+            """
+            INSERT INTO room_readings(room_id, queried_at, remaining_kwh)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (room_id, "2026-07-20 04:00:00", 20),
+                (room_id, "2026-07-20 15:50:00", 25),
+            ],
+        )
+
+    estimate = models.get_today_reading_estimate(
+        room_id, date(2026, 7, 20), PRICE_PER_KWH
+    )
+
+    assert estimate == {"status": "recharge_unverified"}
+
+
+def test_today_readings_do_not_affect_completed_day_statistics(room_id):
+    from nonebot_plugin_sues_bill import models
+
+    with models._connection() as connection:
+        connection.executemany(
+            """
+            INSERT INTO room_readings(room_id, queried_at, remaining_kwh)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (room_id, "2026-07-20 04:00:00", 20),
+                (room_id, "2026-07-20 15:50:00", 17),
+            ],
+        )
+
+    statistics = models.get_usage_statistics(room_id, 1, date(2026, 7, 20))
+
+    assert statistics["valid_days"] == 0
