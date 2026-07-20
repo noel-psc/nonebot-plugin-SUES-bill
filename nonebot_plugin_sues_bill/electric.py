@@ -74,9 +74,7 @@ BUILD_MAP = {
 }
 
 
-async def query_electric_bill(
-    sysid: str, roomid: str, areaid: str, buildid: str
-):
+async def query_electric_bill(sysid: str, roomid: str, areaid: str, buildid: str):
     """查询宿舍电费信息"""
     try:
         async with httpx.AsyncClient(

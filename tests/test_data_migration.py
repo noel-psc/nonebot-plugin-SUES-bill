@@ -37,9 +37,7 @@ async def test_legacy_key_is_migrated_before_encrypted_account(monkeypatch, tmp_
     legacy_dir.mkdir()
     (legacy_dir / "secret.key").write_bytes(b"legacy-key")
     (legacy_dir / "user_1.json").write_text(
-        json.dumps(
-            {"campus_card_account": {"username": "1", "password": "gAAAAA..."}}
-        ),
+        json.dumps({"campus_card_account": {"username": "1", "password": "gAAAAA..."}}),
         encoding="utf-8",
     )
 

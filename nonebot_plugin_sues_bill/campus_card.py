@@ -137,17 +137,13 @@ async def login(username: str, password: str) -> httpx.AsyncClient | None:
         resp.raise_for_status()
 
         # 提取 CSRF token
-        csrf_match = re.search(
-            r'<meta name="_csrf" content="([^"]+)"/>', resp.text
-        )
+        csrf_match = re.search(r'<meta name="_csrf" content="([^"]+)"/>', resp.text)
         csrf_token = csrf_match.group(1) if csrf_match else ""
         if not csrf_token:
             logger.warning("未找到 CSRF token")
 
         # 提取验证码并识别
-        captcha_match = re.search(
-            r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text
-        )
+        captcha_match = re.search(r'<img[^>]+src="([^"]*imageCode[^"]*)"', resp.text)
         captcha = None
         if captcha_match:
             captcha_url = captcha_match.group(1)
@@ -215,12 +211,8 @@ async def query_balance(client: httpx.AsyncClient) -> dict:
         resp = await client.get(INDEX_URL)
 
         # 提取余额
-        balance_match = re.search(
-            r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL
-        )
-        frozen_match = re.search(
-            r"冻结余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL
-        )
+        balance_match = re.search(r"账户余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
+        frozen_match = re.search(r"冻结余额.*?￥\s*([\d.]+)", resp.text, re.DOTALL)
 
         if balance_match:
             return {
