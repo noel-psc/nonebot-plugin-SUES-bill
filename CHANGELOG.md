@@ -1,3 +1,9 @@
+## v1.0.6 (2026-07-07)
+
+### Fix
+
+- add require() for nonebot_plugin_localstore before import
+
 ## v1.0.5 (2026-07-07)
 
 ### Fix
