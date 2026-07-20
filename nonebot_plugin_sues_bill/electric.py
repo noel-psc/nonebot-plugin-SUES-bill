@@ -12,12 +12,12 @@ from nonebot.adapters.onebot.v11 import Bot, Event
 
 from .config import USER_AGENT, REQUEST_TIMEOUT, ELECTRIC_QUERY_PATH, Config
 from .models import (
-    get_daily_usage,
     get_scheduled_rooms,
     get_usage_statistics,
     get_room_subscription,
     set_room_subscription,
     stop_room_subscription,
+    record_electricity_query,
     bind_account_to_subscription,
     subscription_has_bound_account,
     save_electricity_daily_snapshot,
@@ -194,6 +194,11 @@ async def settle_room_electricity(room: dict[str, object], snapshot_date: date) 
         room_id, snapshot_date - timedelta(days=1)
     )
     await asyncio.to_thread(
+        record_electricity_query,
+        query_params,
+        float(result["restElecDegree"]),
+    )
+    await asyncio.to_thread(
         save_electricity_daily_snapshot,
         room_id,
         snapshot_date=snapshot_date,
@@ -222,21 +227,6 @@ async def settle_daily_electricity() -> None:
     )
 
 
-def format_usage_record(record: dict[str, object]) -> str:
-    status = record["status"]
-    if status == "recharge_unverified":
-        return (
-            "⚠️ 昨日剩余电量增加，可能发生电费缴费；未能用绑定账户确认，无法准确计算。"
-        )
-    if status == "calculation_error":
-        return "⚠️ 昨日耗电数据校验失败，请检查校园卡缴费记录。"
-    prefix = "⚠️ 估算值（未绑定缴费账户）\n" if status == "estimated" else ""
-    return (
-        f"{prefix}昨日耗电：{record['consumed_kwh']} 度\n"
-        f"昨日电费：{float(record['cost_yuan']):.2f} 元"
-    )
-
-
 def record_help() -> str:
     return (
         "电费记录命令\n\n"
@@ -245,19 +235,6 @@ def record_help() -> str:
         "#电费 记录 状态 / 停止\n"
         "#电费 记录 绑定 / 解绑"
     )
-
-
-async def get_yesterday_message(user_id: str) -> str:
-    subscription = await asyncio.to_thread(get_room_subscription, user_id)
-    if subscription is None:
-        return "未设置记录宿舍，请先发送：#电费 记录 三期 21 1001"
-    yesterday = (datetime.now(SHANGHAI_TZ) - timedelta(days=1)).date()
-    record = await asyncio.to_thread(
-        get_daily_usage, subscription["room_id"], yesterday
-    )
-    if record is None:
-        return "暂无昨日耗电记录，日界采样完成后会自动生成。"
-    return format_usage_record(record)
 
 
 async def get_record_status_message(user_id: str) -> str:
@@ -356,23 +333,32 @@ async def handle_electric_query(
     user_id = event.get_user_id()
     arg_text = args.extract_plain_text().strip()
     if not arg_text:
-        await electric_query.finish(await get_yesterday_message(user_id))
-    if arg_text == "记录" or arg_text.startswith("记录 "):
+        subscription = await asyncio.to_thread(get_room_subscription, user_id)
+        if subscription is None:
+            await electric_query.finish("请先设置记录宿舍：#电费 记录 三期 21 1001")
+        query_params = {
+            key: str(subscription[key])
+            for key in ("sysid", "roomid", "areaid", "buildid")
+        }
+    elif arg_text == "记录" or arg_text.startswith("记录 "):
         arguments = arg_text.removeprefix("记录").strip()
         await electric_query.finish(await handle_record_command(user_id, arguments))
-
-    days = parse_statistics_days(arg_text)
-    if days is not None:
+    elif (days := parse_statistics_days(arg_text)) is not None:
         if not 1 <= days <= MAX_STATISTICS_DAYS:
             await electric_query.finish(f"统计天数应在 1 到 {MAX_STATISTICS_DAYS} 之间")
         await electric_query.finish(await show_statistics(user_id, days))
-
-    query_params, error = parse_room_params(arg_text)
-    if error:
-        await electric_query.finish(error)
+    else:
+        query_params, error = parse_room_params(arg_text)
+        if error:
+            await electric_query.finish(error)
     assert query_params is not None
     result = await query_electric_bill(**query_params)
     if result.get("retcode") == 0:
+        await asyncio.to_thread(
+            record_electricity_query,
+            query_params,
+            float(result["restElecDegree"]),
+        )
         await electric_query.finish(f"剩余电量: {result['restElecDegree']} 度")
     await electric_query.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
 
@@ -386,6 +372,12 @@ async def handle_electric_raw(
         await electric_raw.finish("格式：#电费原始 sysid roomid areaid buildid")
     result = await query_electric_bill(*parts[:4])
     if result.get("retcode") == 0:
+        query_params = dict(zip(("sysid", "roomid", "areaid", "buildid"), parts))
+        await asyncio.to_thread(
+            record_electricity_query,
+            query_params,
+            float(result["restElecDegree"]),
+        )
         await electric_raw.finish(f"剩余电量: {result['restElecDegree']} 度")
     await electric_raw.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
 
@@ -396,7 +388,7 @@ async def handle_electric_help(
 ) -> None:
     await electric_help.finish(
         "电费查询帮助\n\n"
-        "#电费 - 查看昨日耗电和电费\n"
+        "#电费 - 查询记录宿舍当前余额\n"
         "#电费 区域 楼栋 房间号 - 即时查询余额\n\n"
         f"{record_help()}\n\n"
         "定时日结在每日 00:00 前后错峰执行；绑定账户后可用缴费流水校正。\n"

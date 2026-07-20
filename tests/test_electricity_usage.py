@@ -151,3 +151,15 @@ def test_record_statistics_accepts_compact_and_spaced_days():
     assert parse_statistics_days("统计 7") == 7
     assert parse_statistics_days("统计") == 30
     assert parse_statistics_days("查看") is None
+
+
+def test_successful_queries_are_stored_without_daily_snapshot(monkeypatch, tmp_path):
+    from nonebot_plugin_sues_bill import models
+
+    monkeypatch.setattr(models, "DATA_DIR", tmp_path / "nonebot_plugin_sues_bill")
+    monkeypatch.setattr(models, "LEGACY_DATA_DIR", tmp_path / "data")
+    room_id = models.record_electricity_query(QUERY_PARAMS, 20)
+    models.record_electricity_query(QUERY_PARAMS, 18.5)
+
+    queries = models.get_room_readings(room_id)
+    assert [query["remaining_kwh"] for query in queries] == [18.5, 20.0]

@@ -124,6 +124,12 @@ CREATE TABLE IF NOT EXISTS room_snapshots (
     remaining_kwh REAL NOT NULL,
     PRIMARY KEY(room_id, snapshot_date)
 );
+CREATE TABLE IF NOT EXISTS room_readings (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    queried_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    remaining_kwh REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS room_daily_usage (
     room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     usage_date TEXT NOT NULL,
@@ -135,6 +141,8 @@ CREATE TABLE IF NOT EXISTS room_daily_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_room_daily_usage_date
     ON room_daily_usage(room_id, usage_date);
+CREATE INDEX IF NOT EXISTS idx_room_readings_room_date
+    ON room_readings(room_id, queried_at);
 """
 
 
@@ -473,6 +481,39 @@ def get_scheduled_rooms() -> list[dict[str, Any]]:
         room["room_id"] = int(row["room_id"])
         result.append(room)
     return result
+
+
+def record_electricity_query(
+    query_params: dict[str, str], remaining_kwh: float
+) -> int:
+    """Store a room reading without changing daily boundary snapshots."""
+    initialize_database()
+    with _connection() as connection:
+        room_id = _room_id(connection, query_params)
+        connection.execute(
+            """
+            INSERT INTO room_readings(room_id, remaining_kwh)
+            VALUES (?, ?)
+            """,
+            (room_id, round(remaining_kwh, 3)),
+        )
+    return room_id
+
+
+def get_room_readings(room_id: int) -> list[dict[str, Any]]:
+    """Return a room's manual query records, newest first."""
+    initialize_database()
+    with _connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT queried_at, remaining_kwh
+            FROM room_readings
+            WHERE room_id = ?
+            ORDER BY id DESC
+            """,
+            (room_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def save_electricity_daily_snapshot(
