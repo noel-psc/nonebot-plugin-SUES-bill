@@ -1,3 +1,10 @@
+## v1.1.3 (2026-07-22)
+
+### Fix
+
+- refresh the current electricity balance before estimating today's usage
+- comply with NoneBot configuration and localstore APIs
+
 ## v1.1.1 (2026-07-21)
 
 ### Fix
