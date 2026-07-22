@@ -484,9 +484,7 @@ def get_scheduled_rooms() -> list[dict[str, Any]]:
     return result
 
 
-def record_electricity_query(
-    query_params: dict[str, str], remaining_kwh: float
-) -> int:
+def record_electricity_query(query_params: dict[str, str], remaining_kwh: float) -> int:
     """Store a room reading without changing daily boundary snapshots."""
     initialize_database()
     with _connection() as connection:
