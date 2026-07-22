@@ -66,6 +66,7 @@ exclude_lines = [
 plugins = ["nonebot_plugin_sues_bill"]
 
 [tool.poe.tasks]
+ci = { shell = "ruff check . && uvx basedpyright && uvx prek run --all-files && poe test" }
 test = "pytest --cov=nonebot_plugin_sues_bill --cov-report xml --junitxml=./junit.xml -n auto"
 bump = "cz bump"
 changelog = "cz changelog"

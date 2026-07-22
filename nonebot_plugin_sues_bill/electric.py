@@ -190,7 +190,7 @@ async def settle_room_electricity(room: dict[str, object], snapshot_date: date) 
         logger.warning(f"宿舍 {room['room_id']} 的日界电费查询失败")
         return
 
-    room_id = int(room["room_id"])
+    room_id = int(str(room["room_id"]))
     payment_amount_yuan = await query_bound_payment_amount(
         room_id, snapshot_date - timedelta(days=1)
     )
@@ -219,7 +219,7 @@ async def settle_daily_electricity() -> None:
     semaphore = asyncio.Semaphore(MAX_SCHEDULED_QUERIES)
 
     async def settle_with_limit(room: dict[str, object]) -> None:
-        await asyncio.sleep(get_settlement_delay_seconds(int(room["room_id"])))
+        await asyncio.sleep(get_settlement_delay_seconds(int(str(room["room_id"]))))
         async with semaphore:
             await settle_room_electricity(room, snapshot_date)
 
@@ -409,7 +409,12 @@ async def handle_electric_raw(
         await electric_raw.finish("格式：#电费原始 sysid roomid areaid buildid")
     result = await query_electric_bill(*parts[:4])
     if result.get("retcode") == 0:
-        query_params = dict(zip(("sysid", "roomid", "areaid", "buildid"), parts))
+        query_params: dict[str, str] = {
+            "sysid": parts[0],
+            "roomid": parts[1],
+            "areaid": parts[2],
+            "buildid": parts[3],
+        }
         await asyncio.to_thread(
             record_electricity_query,
             query_params,
