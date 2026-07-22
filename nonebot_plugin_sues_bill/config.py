@@ -1,9 +1,9 @@
 """SUES 校园服务配置"""
 
-from pydantic_settings import BaseSettings
+from pydantic import BaseModel
 
 
-class Config(BaseSettings):
+class Config(BaseModel):
     """插件配置项"""
 
     sues_base_url: str = "https://epay.sues.edu.cn"
@@ -17,9 +17,6 @@ class Config(BaseSettings):
 
     electricity_price_per_kwh: float = 0.617
     """宿舍电价（元/度），用于计算昨日耗电费用"""
-
-    model_config = {"env_prefix": "sues_", "extra": "ignore"}
-
 
 # ─── 以下为内部常量，不可配置 ───────────────────────────────
 

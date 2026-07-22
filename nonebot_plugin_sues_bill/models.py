@@ -10,11 +10,10 @@ from collections.abc import Iterator
 from nonebot import require
 
 require("nonebot_plugin_localstore")
-from nonebot_plugin_localstore import get_plugin_data_file
+from nonebot_plugin_localstore import get_plugin_data_dir
 
-# get_plugin_data_file("") is the plugin-specific directory. Earlier releases
-# accidentally wrote directly to the parent global data directory.
-DATA_DIR = get_plugin_data_file("")
+# Earlier releases accidentally wrote directly to the parent global data directory.
+DATA_DIR = get_plugin_data_dir()
 LEGACY_DATA_DIR = DATA_DIR.parent
 DB_FILE_NAME = "sues_bill.sqlite3"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
