@@ -305,6 +305,18 @@ async def show_statistics(user_id: str, days: int) -> str:
     if subscription is None:
         return "未设置记录宿舍，请先发送：#电费 记录 三期 21 1001"
     if days == 0:
+        query_params = {
+            key: str(subscription[key])
+            for key in ("sysid", "roomid", "areaid", "buildid")
+        }
+        result = await query_electric_bill(**query_params)
+        if result.get("retcode") != 0:
+            return f"查询当前电费失败：{result.get('retmsg', '未知错误')}"
+        await asyncio.to_thread(
+            record_electricity_query,
+            query_params,
+            float(result["restElecDegree"]),
+        )
         estimate = await asyncio.to_thread(
             get_today_reading_estimate,
             subscription["room_id"],
