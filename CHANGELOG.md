@@ -5,6 +5,8 @@
 - refresh the current electricity balance before estimating today's usage
 - comply with NoneBot configuration and localstore APIs
 - settle all recorded rooms together at 00:00 without staggering
+- add administrator-entered readings and payments for daily-settlement corrections
+- mask room numbers and clarify account binding in command replies
 
 ## v1.1.1 (2026-07-21)
 

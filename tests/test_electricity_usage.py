@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -132,6 +133,7 @@ def test_statistics_returns_highest_usage_day(room_id):
     statistics = get_usage_statistics(room_id, 30, date(2026, 7, 20))
     assert statistics == {
         "days": 30,
+        "recorded_days": 2,
         "valid_days": 2,
         "complete_days": 0,
         "estimated_days": 2,
@@ -253,6 +255,59 @@ def test_today_readings_do_not_affect_completed_day_statistics(room_id):
     statistics = models.get_usage_statistics(room_id, 1, date(2026, 7, 20))
 
     assert statistics["valid_days"] == 0
+
+
+def test_manual_entries_are_stored_in_shanghai_time_and_recalculate_usage(room_id):
+    from nonebot_plugin_sues_bill import models
+
+    shanghai_tz = ZoneInfo("Asia/Shanghai")
+    models.record_manual_electricity_reading(
+        QUERY_PARAMS,
+        datetime(2026, 7, 20, 0, 0, tzinfo=shanghai_tz),
+        18,
+    )
+    estimate = models.get_today_reading_estimate(
+        room_id, date(2026, 7, 20), PRICE_PER_KWH
+    )
+    assert estimate == {"status": "insufficient_readings", "reading_count": 1}
+
+    models.save_electricity_daily_snapshot(
+        room_id,
+        snapshot_date=date(2026, 7, 19),
+        remaining_kwh=20,
+        payment_amount_yuan=None,
+        price_per_kwh=PRICE_PER_KWH,
+    )
+    models.record_manual_electricity_payment(
+        QUERY_PARAMS,
+        datetime(2026, 7, 19, 12, 0, tzinfo=shanghai_tz),
+        6.17,
+    )
+    payment_amount = models.get_manual_electricity_payment_amount(
+        room_id, date(2026, 7, 19)
+    )
+    record = models.save_electricity_daily_snapshot(
+        room_id,
+        snapshot_date=date(2026, 7, 20),
+        remaining_kwh=18,
+        payment_amount_yuan=payment_amount,
+        price_per_kwh=PRICE_PER_KWH,
+        replace_usage=True,
+    )
+
+    assert payment_amount == 6.17
+    assert record == {
+        "status": "complete",
+        "consumed_kwh": 12.0,
+        "cost_yuan": 7.4,
+        "payment_amount_yuan": 6.17,
+    }
+
+
+def test_room_description_masks_the_room_number():
+    from nonebot_plugin_sues_bill.electric import describe_room
+
+    assert describe_room(QUERY_PARAMS) == "三期21栋****"
 
 
 @pytest.mark.asyncio

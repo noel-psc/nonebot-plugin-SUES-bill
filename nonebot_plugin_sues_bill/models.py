@@ -131,6 +131,12 @@ CREATE TABLE IF NOT EXISTS room_readings (
     queried_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     remaining_kwh REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS room_manual_payments (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    paid_at TEXT NOT NULL,
+    amount_yuan REAL NOT NULL CHECK(amount_yuan > 0)
+);
 CREATE TABLE IF NOT EXISTS room_daily_usage (
     room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     usage_date TEXT NOT NULL,
@@ -144,6 +150,8 @@ CREATE INDEX IF NOT EXISTS idx_room_daily_usage_date
     ON room_daily_usage(room_id, usage_date);
 CREATE INDEX IF NOT EXISTS idx_room_readings_room_date
     ON room_readings(room_id, queried_at);
+CREATE INDEX IF NOT EXISTS idx_room_manual_payments_room_date
+    ON room_manual_payments(room_id, paid_at);
 """
 
 
@@ -499,6 +507,79 @@ def record_electricity_query(query_params: dict[str, str], remaining_kwh: float)
     return room_id
 
 
+def record_manual_electricity_reading(
+    query_params: dict[str, str], queried_at: datetime, remaining_kwh: float
+) -> int:
+    """Store an administrator-entered meter reading at a Shanghai-local time."""
+    initialize_database()
+    queried_at_utc = queried_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    with _connection() as connection:
+        room_id = _room_id(connection, query_params)
+        connection.execute(
+            """
+            INSERT INTO room_readings(room_id, queried_at, remaining_kwh)
+            VALUES (?, ?, ?)
+            """,
+            (room_id, queried_at_utc, round(remaining_kwh, 3)),
+        )
+    return room_id
+
+
+def record_manual_electricity_payment(
+    query_params: dict[str, str], paid_at: datetime, amount_yuan: float
+) -> int:
+    """Store an administrator-entered electricity payment at a Shanghai-local time."""
+    initialize_database()
+    paid_at_utc = paid_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    with _connection() as connection:
+        room_id = _room_id(connection, query_params)
+        connection.execute(
+            """
+            INSERT INTO room_manual_payments(room_id, paid_at, amount_yuan)
+            VALUES (?, ?, ?)
+            """,
+            (room_id, paid_at_utc, round(amount_yuan, 2)),
+        )
+    return room_id
+
+
+def get_manual_electricity_payment_amount(
+    room_id: int, target_date: date
+) -> float | None:
+    """Return manually entered payments made during one Shanghai natural day."""
+    initialize_database()
+    start = datetime.combine(target_date, time.min, SHANGHAI_TZ).astimezone(UTC)
+    end = datetime.combine(
+        target_date + timedelta(days=1), time.min, SHANGHAI_TZ
+    ).astimezone(UTC)
+    bounds = tuple(moment.strftime("%Y-%m-%d %H:%M:%S") for moment in (start, end))
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            SELECT SUM(amount_yuan) AS amount_yuan
+            FROM room_manual_payments
+            WHERE room_id = ? AND paid_at >= ? AND paid_at < ?
+            """,
+            (room_id, *bounds),
+        ).fetchone()
+    amount = row["amount_yuan"]
+    return round(float(amount), 2) if amount is not None else None
+
+
+def get_electricity_snapshot(room_id: int, snapshot_date: date) -> float | None:
+    """Return one room's saved date-boundary meter reading."""
+    initialize_database()
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            SELECT remaining_kwh FROM room_snapshots
+            WHERE room_id = ? AND snapshot_date = ?
+            """,
+            (room_id, snapshot_date.isoformat()),
+        ).fetchone()
+    return float(row["remaining_kwh"]) if row is not None else None
+
+
 def get_room_readings(room_id: int) -> list[dict[str, Any]]:
     """Return a room's manual query records, newest first."""
     initialize_database()
@@ -577,6 +658,7 @@ def save_electricity_daily_snapshot(
     remaining_kwh: float,
     payment_amount_yuan: float | None,
     price_per_kwh: float,
+    replace_usage: bool = False,
 ) -> dict[str, Any] | None:
     """Persist a room boundary snapshot and settle the prior natural day."""
     initialize_database()
@@ -607,8 +689,15 @@ def save_electricity_daily_snapshot(
             """,
             (room_id, previous_key),
         ).fetchone()
-        if exists:
+        if exists and not replace_usage:
             return None
+        if exists:
+            connection.execute(
+                """
+                DELETE FROM room_daily_usage WHERE room_id = ? AND usage_date = ?
+                """,
+                (room_id, previous_key),
+            )
 
         previous_kwh = float(previous["remaining_kwh"])
         if payment_amount_yuan is None:
@@ -689,6 +778,7 @@ def get_usage_statistics(room_id: int, days: int, today: date) -> dict[str, Any]
     maximum = max(valid, key=lambda row: float(row["consumed_kwh"])) if valid else None
     return {
         "days": days,
+        "recorded_days": len(rows),
         "valid_days": len(valid),
         "complete_days": sum(row["status"] == "complete" for row in rows),
         "estimated_days": sum(row["status"] == "estimated" for row in rows),

@@ -346,7 +346,10 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
 
     if not save_account(event.get_user_id(), parts[0], parts[1]):
         await campus_card_set.finish("该校园卡账号已由其他用户设置，不能重复绑定")
-    await campus_card_set.finish(f"校园卡账号设置成功！学号: {parts[0]}")
+    await campus_card_set.finish(
+        f"校园卡账号设置成功！学号: {parts[0]}\n"
+        "如需校正记录宿舍的缴费，请再发送：#电费 记录 绑定"
+    )
 
 
 @campus_card_help.handle()
@@ -359,5 +362,6 @@ async def handle_campus_card_help(bot: Bot, event: Event, args: Message = Comman
         "#校园卡 — 查询余额\n"
         "#校园卡帮助 — 查看帮助\n\n"
         "【首次使用】\n"
-        "私聊发送：#设置校园卡账号 学号 密码"
+        "私聊发送：#设置校园卡账号 学号 密码\n"
+        "如需校正电费缴费，设置记录宿舍后再发送：#电费 记录 绑定"
     )

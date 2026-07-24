@@ -1,10 +1,10 @@
 import re
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import date, time, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
-from nonebot import logger, require, on_command, get_plugin_config
+from nonebot import logger, require, get_driver, on_command, get_plugin_config
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
 from nonebot.adapters.onebot.v11 import Bot, Event
@@ -16,12 +16,16 @@ from .models import (
     get_room_subscription,
     set_room_subscription,
     stop_room_subscription,
+    get_electricity_snapshot,
     record_electricity_query,
     get_today_reading_estimate,
     bind_account_to_subscription,
     subscription_has_bound_account,
     save_electricity_daily_snapshot,
     unbind_account_from_subscription,
+    record_manual_electricity_payment,
+    record_manual_electricity_reading,
+    get_manual_electricity_payment_amount,
 )
 from .campus_card import login, load_bound_accounts, query_electric_payment_amount
 
@@ -111,7 +115,7 @@ def describe_room(query_params: dict[str, str]) -> str:
         ),
         "?",
     )
-    return f"{area_name}{build_num}栋{query_params['roomid']}"
+    return f"{area_name}{build_num}栋****"
 
 
 async def query_electric_bill(sysid: str, roomid: str, areaid: str, buildid: str):
@@ -171,6 +175,19 @@ async def query_bound_payment_amount(room_id: int, target_date: date) -> float |
     return round(amount, 2)
 
 
+async def query_total_payment_amount(room_id: int, target_date: date) -> float | None:
+    """Combine verified campus-card and administrator-entered payments."""
+    bound_amount = await query_bound_payment_amount(room_id, target_date)
+    manual_amount = await asyncio.to_thread(
+        get_manual_electricity_payment_amount, room_id, target_date
+    )
+    if bound_amount is None:
+        return manual_amount
+    if manual_amount is None:
+        return bound_amount
+    return round(bound_amount + manual_amount, 2)
+
+
 async def settle_room_electricity(room: dict[str, object], snapshot_date: date) -> None:
     """Create one room boundary snapshot and settle its prior natural day."""
     query_params = {
@@ -182,7 +199,7 @@ async def settle_room_electricity(room: dict[str, object], snapshot_date: date) 
         return
 
     room_id = int(str(room["room_id"]))
-    payment_amount_yuan = await query_bound_payment_amount(
+    payment_amount_yuan = await query_total_payment_amount(
         room_id, snapshot_date - timedelta(days=1)
     )
     await asyncio.to_thread(
@@ -220,7 +237,18 @@ def record_help() -> str:
         "#电费 统计 0（今日截至当前估算）\n"
         "#电费 统计 [天数]（已结束自然日）\n"
         "#电费 记录 状态 / 停止\n"
-        "#电费 记录 绑定 / 解绑"
+        "#电费 记录 绑定 / 解绑\n"
+        "#电费 管理 - 管理员手动录入"
+    )
+
+
+def account_correction_tip(has_bound_account: bool) -> str:
+    if has_bound_account:
+        return "账户校正：已绑定校园卡账户，缴费日会按流水校正。"
+    return (
+        "账户校正：未绑定，缴费日可能不准确。\n"
+        "如需校正，请先私聊发送 #设置校园卡账号 学号 密码，"
+        "再发送 #电费 记录 绑定。"
     )
 
 
@@ -229,10 +257,10 @@ async def get_record_status_message(user_id: str) -> str:
     if subscription is None:
         return "当前未设置记录宿舍"
     has_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
-    account_status = (
-        "已绑定，缴费日可精确校正" if has_account else "未绑定，缴费日可能无法准确统计"
+    return (
+        f"记录宿舍：{describe_room(subscription)}\n"
+        f"{account_correction_tip(has_account)}"
     )
-    return f"记录宿舍：{describe_room(subscription)}\n账户校正：{account_status}"
 
 
 def parse_statistics_days(arguments: str) -> int | None:
@@ -255,7 +283,8 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
         await asyncio.to_thread(set_room_subscription, user_id, query_params)
         return (
             f"已设置记录宿舍：{describe_room(query_params)}\n"
-            "每天 00:00 会查询并结算昨日耗电。"
+            "每天 00:00 会查询并结算昨日耗电。\n"
+            "如需缴费日精确校正，请先私聊设置校园卡账号，再发送 #电费 记录 绑定。"
         )
     if action == "状态":
         return await get_record_status_message(user_id)
@@ -285,10 +314,110 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
     return record_help()
 
 
+def parse_admin_entry(
+    arguments: str,
+) -> tuple[str, dict[str, str], datetime, float] | str:
+    """Parse an administrator's dated meter reading or payment entry."""
+    parts = arguments.split()
+    if not parts or parts[0] not in {"读数", "缴费"}:
+        return admin_help()
+    if len(parts) not in {6, 7}:
+        return "格式：#电费 管理 读数/缴费 区域 楼栋 房间号 日期 [时间] 数值"
+    action = parts[0]
+    query_params, error = parse_room_params(" ".join(parts[1:4]))
+    if error:
+        return error.replace("#电费", "#电费 管理")
+    assert query_params is not None
+    try:
+        entry_date = date.fromisoformat(parts[4])
+        entry_time = time.fromisoformat(parts[5]) if len(parts) == 7 else time.min
+        amount = float(parts[-1])
+    except ValueError:
+        return "日期应为 YYYY-MM-DD，时间应为 HH:MM，数值应为正数。"
+    if amount < 0 or (action == "缴费" and amount == 0):
+        return "读数不能小于 0，缴费金额必须大于 0。"
+    entered_at = datetime.combine(entry_date, entry_time, SHANGHAI_TZ)
+    return action, query_params, entered_at, amount
+
+
+def admin_help() -> str:
+    return (
+        "管理员电费录入命令\n\n"
+        "#电费 管理 读数 区域 楼栋 房间号 日期 [时间] 剩余电量\n"
+        "#电费 管理 缴费 区域 楼栋 房间号 日期 [时间] 金额\n"
+        "日期格式：YYYY-MM-DD；时间可省略，默认为 00:00。"
+    )
+
+
+async def handle_admin_command(user_id: str, arguments: str) -> str:
+    if user_id not in get_driver().config.superusers:
+        return "仅机器人管理员可使用电费管理命令。"
+    entry = parse_admin_entry(arguments)
+    if isinstance(entry, str):
+        return entry
+    action, query_params, entered_at, amount = entry
+    if action == "读数":
+        room_id = await asyncio.to_thread(
+            record_manual_electricity_reading, query_params, entered_at, amount
+        )
+    else:
+        room_id = await asyncio.to_thread(
+            record_manual_electricity_payment, query_params, entered_at, amount
+        )
+    entry_date = entered_at.date()
+    if action == "读数":
+        payment_amount = await query_total_payment_amount(
+            room_id, entry_date - timedelta(days=1)
+        )
+        record = await asyncio.to_thread(
+            save_electricity_daily_snapshot,
+            room_id,
+            snapshot_date=entry_date,
+            remaining_kwh=amount,
+            payment_amount_yuan=payment_amount,
+            price_per_kwh=config.electricity_price_per_kwh,
+            replace_usage=True,
+        )
+        settlement_message = "已重算前一日耗电。"
+        if record is None:
+            settlement_message = "已保存读数，尚缺前一日读数，暂无法结算。"
+        return (
+            f"已录入 {describe_room(query_params)} 在"
+            f" {entered_at:%Y-%m-%d %H:%M} 的剩余电量：{amount} 度。\n"
+            f"{settlement_message}"
+        )
+    next_snapshot = await asyncio.to_thread(
+        get_electricity_snapshot, room_id, entry_date + timedelta(days=1)
+    )
+    if next_snapshot is None:
+        return (
+            f"已录入 {describe_room(query_params)} 在"
+            f" {entered_at:%Y-%m-%d %H:%M} 的缴费：{amount:.2f} 元。\n"
+            "次日读数生成后会自动参与该日结算。"
+        )
+    payment_amount = await query_total_payment_amount(room_id, entry_date)
+    record = await asyncio.to_thread(
+        save_electricity_daily_snapshot,
+        room_id,
+        snapshot_date=entry_date + timedelta(days=1),
+        remaining_kwh=next_snapshot,
+        payment_amount_yuan=payment_amount,
+        price_per_kwh=config.electricity_price_per_kwh,
+        replace_usage=True,
+    )
+    return (
+        f"已录入 {describe_room(query_params)} 在"
+        f" {entered_at:%Y-%m-%d %H:%M} 的缴费：{amount:.2f} 元。\n"
+        f"{'已重算该日耗电。' if record is not None else '已保存缴费记录。'}"
+    )
+
+
 async def show_statistics(user_id: str, days: int) -> str:
     subscription = await asyncio.to_thread(get_room_subscription, user_id)
     if subscription is None:
         return "未设置记录宿舍，请先发送：#电费 记录 三期 21 1001"
+    has_bound_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
+    correction_tip = account_correction_tip(has_bound_account)
     if days == 0:
         query_params = {
             key: str(subscription[key])
@@ -311,18 +440,19 @@ async def show_statistics(user_id: str, days: int) -> str:
         if estimate["status"] == "insufficient_readings":
             return (
                 f"{describe_room(subscription)}今日截至当前暂无可估算的耗电记录。\n"
-                f"今日已记录 {estimate['reading_count']} 次，至少需要两次成功查询。"
+                f"今日已记录 {estimate['reading_count']} 次，至少需要两次成功查询。\n"
+                f"{correction_tip}"
             )
         if estimate["status"] == "recharge_unverified":
             return (
                 f"{describe_room(subscription)}今日截至当前无法估算耗电。\n"
-                "检测到余额增加，今日可能已缴费。"
+                f"检测到余额增加，今日可能已缴费。\n{correction_tip}"
             )
         return (
             f"{describe_room(subscription)}今日截至当前耗电（估算）\n"
             f"耗电：{estimate['consumed_kwh']} 度\n"
             f"电费：{estimate['cost_yuan']:.2f} 元\n"
-            "按今日首次和最新查询余额计算；缴费后可能不准确。"
+            f"按今日首次和最新查询余额计算；缴费后可能不准确。\n{correction_tip}"
         )
     statistics = await asyncio.to_thread(
         get_usage_statistics,
@@ -331,7 +461,10 @@ async def show_statistics(user_id: str, days: int) -> str:
         datetime.now(SHANGHAI_TZ).date(),
     )
     if statistics["valid_days"] == 0:
-        return f"近{days}天暂无可统计的耗电记录。"
+        return (
+            f"已记录 {statistics['recorded_days']} 天，但暂无可统计的耗电记录。\n"
+            f"{correction_tip}"
+        )
     average = statistics["total_kwh"] / statistics["valid_days"]
     status_summary = (
         f"准确 {statistics['complete_days']} 天，"
@@ -339,12 +472,14 @@ async def show_statistics(user_id: str, days: int) -> str:
         f"未计入 {statistics['unavailable_days']} 天"
     )
     return (
-        f"{describe_room(subscription)}近{days}天耗电统计\n"
+        f"{describe_room(subscription)}已记录"
+        f" {statistics['recorded_days']} 天耗电统计\n"
         f"总耗电：{statistics['total_kwh']} 度\n"
         f"总电费：{statistics['total_cost_yuan']:.2f} 元\n"
         f"日均耗电：{average:.2f} 度（{statistics['valid_days']}天）\n"
         f"最高耗电：{statistics['max_date']}，{statistics['max_kwh']} 度\n"
-        f"{status_summary}"
+        f"{status_summary}\n"
+        f"{correction_tip}"
     )
 
 
@@ -362,6 +497,9 @@ async def handle_electric_query(
             key: str(subscription[key])
             for key in ("sysid", "roomid", "areaid", "buildid")
         }
+    elif arg_text == "管理" or arg_text.startswith("管理 "):
+        arguments = arg_text.removeprefix("管理").strip()
+        await electric_query.finish(await handle_admin_command(user_id, arguments))
     elif arg_text == "记录" or arg_text.startswith("记录 "):
         arguments = arg_text.removeprefix("记录").strip()
         await electric_query.finish(await handle_record_command(user_id, arguments))
