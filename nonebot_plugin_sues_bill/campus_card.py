@@ -299,8 +299,6 @@ async def handle_campus_card_query(
     bot: Bot, event: Event, args: Message = CommandArg()
 ):
     """查询校园卡余额"""
-    if not isinstance(event, PrivateMessageEvent):
-        await campus_card_query.finish("为保护校园卡余额隐私，请私聊机器人查询。")
     user_id = event.get_user_id()
     account = load_account(user_id)
     if not account:
@@ -361,7 +359,7 @@ async def handle_campus_card_help(bot: Bot, event: Event, args: Message = Comman
         "💳 校园卡查询帮助\n"
         "━━━━━━━━━━━━\n\n"
         "【使用方式】\n"
-        "私聊 #校园卡 — 查询余额\n"
+        "#校园卡 — 查询余额\n"
         "#校园卡帮助 — 查看帮助\n\n"
         "【首次使用】\n"
         "私聊发送：#设置校园卡账号 学号 密码\n"
