@@ -7,6 +7,7 @@
 - settle all recorded rooms together at 00:00 without staggering
 - add administrator-entered readings and payments for daily-settlement corrections
 - mask room numbers and clarify account binding in command replies
+- restrict campus-card balance queries to private chats
 
 ## v1.1.1 (2026-07-21)
 
