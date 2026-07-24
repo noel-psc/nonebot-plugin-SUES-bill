@@ -224,6 +224,11 @@ async def recalculate_bound_history(room_id: int) -> int | None:
     """Recalculate every stored day when its bound card history is verified."""
     if not await sync_bound_payment_records(room_id):
         return None
+    return await recalculate_cached_history(room_id)
+
+
+async def recalculate_cached_history(room_id: int) -> int:
+    """Rebuild stored usage rows from cached payments and balance snapshots."""
     amounts = await asyncio.to_thread(get_electricity_payment_amounts, room_id)
     return await asyncio.to_thread(
         recalculate_electricity_history,
@@ -244,9 +249,17 @@ async def settle_room_electricity(room: dict[str, object], snapshot_date: date) 
         return
 
     room_id = int(str(room["room_id"]))
-    payment_amount_yuan = await query_total_payment_amount(
-        room_id, snapshot_date - timedelta(days=1)
+    target_date = snapshot_date - timedelta(days=1)
+    bound_amount = await query_bound_payment_amount(room_id, target_date)
+    manual_amount = await asyncio.to_thread(
+        get_manual_electricity_payment_amount, room_id, target_date
     )
+    if bound_amount is None:
+        payment_amount_yuan = manual_amount
+    elif manual_amount is None:
+        payment_amount_yuan = bound_amount
+    else:
+        payment_amount_yuan = round(bound_amount + manual_amount, 2)
     await asyncio.to_thread(
         record_electricity_query,
         query_params,
@@ -260,6 +273,8 @@ async def settle_room_electricity(room: dict[str, object], snapshot_date: date) 
         payment_amount_yuan=payment_amount_yuan,
         price_per_kwh=config.electricity_price_per_kwh,
     )
+    if bound_amount is not None:
+        await recalculate_cached_history(room_id)
 
 
 @scheduler.scheduled_job(
@@ -516,6 +531,8 @@ async def show_statistics(user_id: str, days: int) -> str:
             f"电费：{estimate['cost_yuan']:.2f} 元\n"
             f"按今日首次和最新查询余额计算；缴费后可能不准确。\n{correction_tip}"
         )
+    if has_bound_account:
+        await recalculate_bound_history(subscription["room_id"])
     statistics = await asyncio.to_thread(
         get_usage_statistics,
         subscription["room_id"],

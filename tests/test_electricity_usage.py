@@ -402,3 +402,74 @@ async def test_daily_settlement_starts_all_rooms_without_stagger(monkeypatch):
     await electric.settle_daily_electricity()
 
     assert settled_room_ids == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_daily_settlement_rebuilds_bound_room_history(monkeypatch):
+    from nonebot_plugin_sues_bill import electric
+
+    rebuilt_room_ids: list[int] = []
+
+    async def query_bill(**_: str) -> dict[str, float | int]:
+        return {"retcode": 0, "restElecDegree": 18.0}
+
+    async def bound_amount(_: int, __: date) -> float:
+        return 0.0
+
+    async def rebuild_history(room_id: int) -> int:
+        rebuilt_room_ids.append(room_id)
+        return 2
+
+    monkeypatch.setattr(electric, "query_electric_bill", query_bill)
+    monkeypatch.setattr(electric, "query_bound_payment_amount", bound_amount)
+    monkeypatch.setattr(
+        electric, "get_manual_electricity_payment_amount", lambda *_: None
+    )
+    monkeypatch.setattr(electric, "record_electricity_query", lambda *_: 1)
+    monkeypatch.setattr(
+        electric, "save_electricity_daily_snapshot", lambda *_, **__: None
+    )
+    monkeypatch.setattr(electric, "recalculate_cached_history", rebuild_history)
+
+    await electric.settle_room_electricity(
+        {**QUERY_PARAMS, "room_id": 1}, date(2026, 7, 24)
+    )
+
+    assert rebuilt_room_ids == [1]
+
+
+@pytest.mark.asyncio
+async def test_statistics_refreshes_history_for_existing_bound_account(monkeypatch):
+    from nonebot_plugin_sues_bill import electric
+
+    refreshed_room_ids: list[int] = []
+
+    async def refresh_history(room_id: int) -> int:
+        refreshed_room_ids.append(room_id)
+        return 2
+
+    monkeypatch.setattr(
+        electric, "get_room_subscription", lambda _: {**QUERY_PARAMS, "room_id": 1}
+    )
+    monkeypatch.setattr(electric, "subscription_has_bound_account", lambda _: True)
+    monkeypatch.setattr(electric, "recalculate_bound_history", refresh_history)
+    monkeypatch.setattr(
+        electric,
+        "get_usage_statistics",
+        lambda *_: {
+            "recorded_days": 2,
+            "valid_days": 2,
+            "complete_days": 2,
+            "estimated_days": 0,
+            "unavailable_days": 0,
+            "total_kwh": 12.9,
+            "total_cost_yuan": 7.96,
+            "max_date": "2026-07-23",
+            "max_kwh": 10.3,
+        },
+    )
+
+    message = await electric.show_statistics("1", 30)
+
+    assert refreshed_room_ids == [1]
+    assert "准确 2 天，估算 0 天" in message
