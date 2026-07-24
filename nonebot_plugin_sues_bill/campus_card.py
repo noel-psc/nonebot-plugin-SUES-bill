@@ -2,6 +2,7 @@
 
 import re
 import json
+import asyncio
 import hashlib
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -29,6 +30,7 @@ from .models import (
     load_campus_card_account,
     save_campus_card_account,
     get_bound_accounts_for_room,
+    subscription_has_bound_account,
 )
 
 config = get_plugin_config(Config)
@@ -110,6 +112,19 @@ def save_account(user_id: str, username: str, password: str) -> bool:
     """保存指定用户的校园卡账号（密码加密存储）"""
     encrypted = _encrypt_password(password)
     return save_campus_card_account(user_id, username, encrypted)
+
+
+def account_saved_message(username: str, has_bound_account: bool) -> str:
+    """Describe whether updated credentials still need an explicit room binding."""
+    if has_bound_account:
+        return (
+            f"校园卡账号更新成功！学号: {username}\n"
+            "原记录宿舍绑定已保留，统计时会自动同步账单并校正历史。"
+        )
+    return (
+        f"校园卡账号设置成功！学号: {username}\n"
+        "如需校正记录宿舍的缴费，请再发送：#电费 记录 绑定"
+    )
 
 
 # ─── 工具函数 ─────────────────────────────────────────────
@@ -255,11 +270,42 @@ async def query_electric_payment_records(
             params={"pageno": page_no},
         )
         resp.raise_for_status()
-        return resp.json()
+        response_text = resp.text.lstrip()
+        if response_text.startswith("<"):
+            reason = (
+                "账单登录状态已过期"
+                if "登录已过期" in response_text
+                else "账单接口返回网页而非数据"
+            )
+            logger.error(
+                f"{reason}: status={resp.status_code}, "
+                f"content_type={resp.headers.get('content-type', 'unknown')}"
+            )
+            return {"retcode": -1, "retmsg": reason}
+        try:
+            payload = json.loads(response_text, strict=False)
+        except json.JSONDecodeError as error:
+            logger.error(
+                "账单接口返回无效 JSON: "
+                f"status={resp.status_code}, content_type="
+                f"{resp.headers.get('content-type', 'unknown')}, "
+                f"line={error.lineno}, column={error.colno}"
+            )
+            return {"retcode": -1, "retmsg": "账单接口返回无效数据"}
+        return (
+            payload
+            if isinstance(payload, dict)
+            else {
+                "retcode": -1,
+                "retmsg": "账单接口返回无效数据",
+            }
+        )
 
     try:
         bill_page = await client.get(config.sues_base_url + BILL_PAGE_PATH)
         bill_page.raise_for_status()
+        if "登录已过期" in bill_page.text:
+            return {"retcode": -1, "retmsg": "账单登录状态已过期"}
         first_page = await load_page(1)
         if first_page.get("retcode") != 0:
             return {"retcode": -1, "retmsg": first_page.get("retmsg", "账单查询失败")}
@@ -393,12 +439,11 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
     if len(parts) < 2:
         await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
 
-    if not save_account(event.get_user_id(), parts[0], parts[1]):
+    user_id = event.get_user_id()
+    if not save_account(user_id, parts[0], parts[1]):
         await campus_card_set.finish("该校园卡账号已由其他用户设置，不能重复绑定")
-    await campus_card_set.finish(
-        f"校园卡账号设置成功！学号: {parts[0]}\n"
-        "如需校正记录宿舍的缴费，请再发送：#电费 记录 绑定"
-    )
+    has_bound_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
+    await campus_card_set.finish(account_saved_message(parts[0], has_bound_account))
 
 
 @campus_card_help.handle()

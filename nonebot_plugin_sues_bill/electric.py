@@ -199,7 +199,7 @@ async def _sync_bound_payment_records(room_id: int) -> str | None:
             await client.aclose()
         if result.get("retcode") != 0:
             logger.warning(f"宿舍 {room_id} 的绑定校园卡流水查询失败")
-            return "账单查询失败"
+            return str(result.get("retmsg", "账单查询失败"))
         await asyncio.to_thread(
             save_electricity_payment_records, room_id, result["records"]
         )

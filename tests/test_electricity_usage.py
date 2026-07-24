@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 
 QUERY_PARAMS = {
@@ -10,6 +11,22 @@ QUERY_PARAMS = {
     "buildid": "13",
 }
 PRICE_PER_KWH = 0.617
+
+
+@pytest.mark.asyncio
+async def test_payment_query_reports_expired_bill_session(monkeypatch):
+    from nonebot_plugin_sues_bill import campus_card
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/bill"):
+            return httpx.Response(200, text="\n\n<html>登录已过期</html>")
+        return httpx.Response(200, json={"retcode": 0, "dtls": []})
+
+    monkeypatch.setattr(campus_card.config, "sues_base_url", "https://example.test")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await campus_card.query_electric_payment_records(client)
+
+    assert result == {"retcode": -1, "retmsg": "账单登录状态已过期"}
 
 
 @pytest.fixture
@@ -224,6 +241,15 @@ def test_record_statistics_accepts_compact_and_spaced_days():
     assert parse_statistics_days("统计 0") == 0
     assert parse_statistics_days("统计") == 30
     assert parse_statistics_days("查看") is None
+
+
+def test_updated_bound_account_message_does_not_request_rebinding():
+    from nonebot_plugin_sues_bill.campus_card import account_saved_message
+
+    message = account_saved_message("20260001", has_bound_account=True)
+
+    assert "原记录宿舍绑定已保留" in message
+    assert "#电费 记录 绑定" not in message
 
 
 def test_successful_queries_are_stored_without_daily_snapshot(monkeypatch, tmp_path):
