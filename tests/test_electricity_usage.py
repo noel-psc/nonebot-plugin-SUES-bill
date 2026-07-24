@@ -444,15 +444,15 @@ async def test_statistics_refreshes_history_for_existing_bound_account(monkeypat
 
     refreshed_room_ids: list[int] = []
 
-    async def refresh_history(room_id: int) -> int:
+    async def refresh_history(room_id: int) -> tuple[int, None]:
         refreshed_room_ids.append(room_id)
-        return 2
+        return 2, None
 
     monkeypatch.setattr(
         electric, "get_room_subscription", lambda _: {**QUERY_PARAMS, "room_id": 1}
     )
     monkeypatch.setattr(electric, "subscription_has_bound_account", lambda _: True)
-    monkeypatch.setattr(electric, "recalculate_bound_history", refresh_history)
+    monkeypatch.setattr(electric, "recalculate_bound_history_detailed", refresh_history)
     monkeypatch.setattr(
         electric,
         "get_usage_statistics",
@@ -473,3 +473,73 @@ async def test_statistics_refreshes_history_for_existing_bound_account(monkeypat
 
     assert refreshed_room_ids == [1]
     assert "准确 2 天，估算 0 天" in message
+
+
+@pytest.mark.asyncio
+async def test_statistics_reports_failed_bound_history_refresh(monkeypatch):
+    from nonebot_plugin_sues_bill import electric
+
+    monkeypatch.setattr(
+        electric, "get_room_subscription", lambda _: {**QUERY_PARAMS, "room_id": 1}
+    )
+    monkeypatch.setattr(electric, "subscription_has_bound_account", lambda _: True)
+
+    async def failed_refresh(_: int) -> tuple[None, str]:
+        return None, "校园卡登录失败"
+
+    monkeypatch.setattr(electric, "recalculate_bound_history_detailed", failed_refresh)
+    monkeypatch.setattr(
+        electric,
+        "get_usage_statistics",
+        lambda *_: {
+            "recorded_days": 1,
+            "valid_days": 1,
+            "complete_days": 0,
+            "estimated_days": 1,
+            "unavailable_days": 0,
+            "total_kwh": 2.0,
+            "total_cost_yuan": 1.23,
+            "max_date": "2026-07-23",
+            "max_kwh": 2.0,
+        },
+    )
+
+    message = await electric.show_statistics("1", 30)
+
+    assert "本次账单同步失败" in message
+    assert "校园卡登录失败" in message
+
+
+@pytest.mark.asyncio
+async def test_statistics_reports_missing_boundary_snapshots(monkeypatch):
+    from nonebot_plugin_sues_bill import electric
+
+    monkeypatch.setattr(
+        electric, "get_room_subscription", lambda _: {**QUERY_PARAMS, "room_id": 1}
+    )
+    monkeypatch.setattr(electric, "subscription_has_bound_account", lambda _: True)
+
+    async def empty_refresh(_: int) -> tuple[int, None]:
+        return 0, None
+
+    monkeypatch.setattr(electric, "recalculate_bound_history_detailed", empty_refresh)
+    monkeypatch.setattr(
+        electric,
+        "get_usage_statistics",
+        lambda *_: {
+            "recorded_days": 1,
+            "valid_days": 1,
+            "complete_days": 0,
+            "estimated_days": 1,
+            "unavailable_days": 0,
+            "total_kwh": 2.0,
+            "total_cost_yuan": 1.23,
+            "max_date": "2026-07-23",
+            "max_kwh": 2.0,
+        },
+    )
+
+    message = await electric.show_statistics("1", 30)
+
+    assert "账单同步成功" in message
+    assert "缺少连续日界余额快照" in message

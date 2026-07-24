@@ -178,23 +178,28 @@ async def query_bound_payment_amount(room_id: int, target_date: date) -> float |
 
 async def sync_bound_payment_records(room_id: int) -> bool:
     """Incrementally cache the bound account's verified electricity payments."""
+    return await _sync_bound_payment_records(room_id) is None
+
+
+async def _sync_bound_payment_records(room_id: int) -> str | None:
+    """Cache payment records and return a privacy-safe failure reason."""
     accounts = await asyncio.to_thread(load_bound_accounts, room_id)
     if not accounts:
-        return False
+        return "未找到可用于校正的绑定账户"
 
     latest_bill_at = await asyncio.to_thread(get_latest_electricity_bill_at, room_id)
     for account in accounts:
         client = await login(account["username"], account["password"])
         if client is None:
             logger.warning(f"宿舍 {room_id} 的绑定校园卡登录失败")
-            return False
+            return "校园卡登录失败"
         try:
             result = await query_electric_payment_records(client, latest_bill_at)
         finally:
             await client.aclose()
         if result.get("retcode") != 0:
             logger.warning(f"宿舍 {room_id} 的绑定校园卡流水查询失败")
-            return False
+            return "账单查询失败"
         await asyncio.to_thread(
             save_electricity_payment_records, room_id, result["records"]
         )
@@ -204,7 +209,7 @@ async def sync_bound_payment_records(room_id: int) -> bool:
                 room_id,
                 datetime.fromisoformat(result["latest_bill_at"]),
             )
-    return True
+    return None
 
 
 async def query_total_payment_amount(room_id: int, target_date: date) -> float | None:
@@ -222,9 +227,18 @@ async def query_total_payment_amount(room_id: int, target_date: date) -> float |
 
 async def recalculate_bound_history(room_id: int) -> int | None:
     """Recalculate every stored day when its bound card history is verified."""
-    if not await sync_bound_payment_records(room_id):
-        return None
-    return await recalculate_cached_history(room_id)
+    recalculated_days, _ = await recalculate_bound_history_detailed(room_id)
+    return recalculated_days
+
+
+async def recalculate_bound_history_detailed(
+    room_id: int,
+) -> tuple[int | None, str | None]:
+    """Recalculate history and retain a privacy-safe sync failure reason."""
+    sync_error = await _sync_bound_payment_records(room_id)
+    if sync_error is not None:
+        return None, sync_error
+    return await recalculate_cached_history(room_id), None
 
 
 async def recalculate_cached_history(room_id: int) -> int:
@@ -302,8 +316,26 @@ def record_help() -> str:
     )
 
 
-def account_correction_tip(has_bound_account: bool) -> str:
+def account_correction_tip(
+    has_bound_account: bool,
+    history_sync_succeeded: bool | None = None,
+    recalculated_days: int | None = None,
+    remaining_estimated_days: int = 0,
+    history_sync_error: str | None = None,
+) -> str:
     if has_bound_account:
+        if history_sync_succeeded is False:
+            return (
+                "账户校正：已绑定校园卡账户，但本次账单同步失败"
+                f"（{history_sync_error or '未知原因'}），"
+                "历史记录尚未校正。\n请稍后重新统计；管理员可查看机器人日志。"
+            )
+        if history_sync_succeeded and remaining_estimated_days > 0:
+            return (
+                "账户校正：账单同步成功，"
+                f"已重算 {recalculated_days or 0} 天；仍有"
+                f" {remaining_estimated_days} 天缺少连续日界余额快照，保留估算。"
+            )
         return (
             "账户校正：已绑定校园卡账户，历史及后续记录会按流水校正。\n"
             "前提：该校园卡仅给此宿舍缴费，且此宿舍仅由该校园卡缴费。"
@@ -494,8 +526,8 @@ async def show_statistics(user_id: str, days: int) -> str:
     if subscription is None:
         return "未设置记录宿舍，请先发送：#电费 记录 三期 21 1001"
     has_bound_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
-    correction_tip = account_correction_tip(has_bound_account)
     if days == 0:
+        correction_tip = account_correction_tip(has_bound_account)
         query_params = {
             key: str(subscription[key])
             for key in ("sysid", "roomid", "areaid", "buildid")
@@ -531,13 +563,25 @@ async def show_statistics(user_id: str, days: int) -> str:
             f"电费：{estimate['cost_yuan']:.2f} 元\n"
             f"按今日首次和最新查询余额计算；缴费后可能不准确。\n{correction_tip}"
         )
+    recalculated_days: int | None = None
+    history_sync_error: str | None = None
     if has_bound_account:
-        await recalculate_bound_history(subscription["room_id"])
+        (
+            recalculated_days,
+            history_sync_error,
+        ) = await recalculate_bound_history_detailed(subscription["room_id"])
     statistics = await asyncio.to_thread(
         get_usage_statistics,
         subscription["room_id"],
         days,
         datetime.now(SHANGHAI_TZ).date(),
+    )
+    correction_tip = account_correction_tip(
+        has_bound_account,
+        recalculated_days is not None if has_bound_account else None,
+        recalculated_days,
+        statistics["estimated_days"],
+        history_sync_error,
     )
     if statistics["valid_days"] == 0:
         return (
