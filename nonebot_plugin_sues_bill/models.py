@@ -4,8 +4,9 @@ from typing import Any
 from pathlib import Path
 from datetime import UTC, date, time, datetime, timedelta
 from zoneinfo import ZoneInfo
+from itertools import pairwise
 from contextlib import contextmanager
-from collections.abc import Iterator
+from collections.abc import Mapping, Iterable, Iterator
 
 from nonebot import require
 
@@ -137,6 +138,18 @@ CREATE TABLE IF NOT EXISTS room_manual_payments (
     paid_at TEXT NOT NULL,
     amount_yuan REAL NOT NULL CHECK(amount_yuan > 0)
 );
+CREATE TABLE IF NOT EXISTS room_electricity_payments (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    source_key TEXT NOT NULL,
+    paid_at TEXT NOT NULL,
+    amount_yuan REAL NOT NULL CHECK(amount_yuan > 0),
+    UNIQUE(room_id, source_key)
+);
+CREATE TABLE IF NOT EXISTS room_electricity_payment_syncs (
+    room_id INTEGER PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    latest_bill_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS room_daily_usage (
     room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     usage_date TEXT NOT NULL,
@@ -152,6 +165,8 @@ CREATE INDEX IF NOT EXISTS idx_room_readings_room_date
     ON room_readings(room_id, queried_at);
 CREATE INDEX IF NOT EXISTS idx_room_manual_payments_room_date
     ON room_manual_payments(room_id, paid_at);
+CREATE INDEX IF NOT EXISTS idx_room_electricity_payments_room_date
+    ON room_electricity_payments(room_id, paid_at);
 """
 
 
@@ -566,6 +581,113 @@ def get_manual_electricity_payment_amount(
     return round(float(amount), 2) if amount is not None else None
 
 
+def get_latest_electricity_bill_at(room_id: int) -> datetime | None:
+    """Return the latest campus-card bill time covered by the local cache."""
+    initialize_database()
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            SELECT latest_bill_at FROM room_electricity_payment_syncs
+            WHERE room_id = ?
+            """,
+            (room_id,),
+        ).fetchone()
+    latest_bill_at = row["latest_bill_at"] if row is not None else None
+    return (
+        datetime.strptime(str(latest_bill_at), "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        if latest_bill_at is not None
+        else None
+    )
+
+
+def save_electricity_payment_records(
+    room_id: int, records: Iterable[Mapping[str, object]]
+) -> None:
+    """Idempotently cache verified campus-card electricity payment records."""
+    values = [
+        (
+            room_id,
+            str(record["source_key"]),
+            datetime.fromisoformat(str(record["paid_at"]))
+            .astimezone(UTC)
+            .strftime("%Y-%m-%d %H:%M:%S"),
+            round(float(str(record["amount_yuan"])), 2),
+        )
+        for record in records
+    ]
+    if not values:
+        return
+    initialize_database()
+    with _connection() as connection:
+        connection.executemany(
+            """
+            INSERT INTO room_electricity_payments(
+                room_id, source_key, paid_at, amount_yuan
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(room_id, source_key) DO UPDATE SET
+                paid_at = excluded.paid_at,
+                amount_yuan = excluded.amount_yuan
+            """,
+            values,
+        )
+
+
+def save_electricity_payment_sync(room_id: int, latest_bill_at: datetime) -> None:
+    """Record the newest bill timestamp successfully covered by a sync."""
+    initialize_database()
+    value = latest_bill_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    with _connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO room_electricity_payment_syncs(room_id, latest_bill_at)
+            VALUES (?, ?)
+            ON CONFLICT(room_id) DO UPDATE SET
+                latest_bill_at = MAX(latest_bill_at, excluded.latest_bill_at)
+            """,
+            (room_id, value),
+        )
+
+
+def get_electricity_payment_amount(room_id: int, target_date: date) -> float:
+    """Return the cached campus-card payment total for one Shanghai day."""
+    start = datetime.combine(target_date, time.min, SHANGHAI_TZ).astimezone(UTC)
+    end = datetime.combine(
+        target_date + timedelta(days=1), time.min, SHANGHAI_TZ
+    ).astimezone(UTC)
+    bounds = tuple(moment.strftime("%Y-%m-%d %H:%M:%S") for moment in (start, end))
+    initialize_database()
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            SELECT SUM(amount_yuan) AS amount_yuan
+            FROM room_electricity_payments
+            WHERE room_id = ? AND paid_at >= ? AND paid_at < ?
+            """,
+            (room_id, *bounds),
+        ).fetchone()
+    return round(float(row["amount_yuan"] or 0), 2)
+
+
+def get_electricity_payment_amounts(room_id: int) -> dict[date, float]:
+    """Return all cached campus-card payments grouped by Shanghai day."""
+    initialize_database()
+    with _connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT date(paid_at, '+8 hours') AS paid_date,
+                   SUM(amount_yuan) AS amount_yuan
+            FROM room_electricity_payments
+            WHERE room_id = ?
+            GROUP BY paid_date
+            """,
+            (room_id,),
+        ).fetchall()
+    return {
+        date.fromisoformat(str(row["paid_date"])): round(float(row["amount_yuan"]), 2)
+        for row in rows
+    }
+
+
 def get_electricity_snapshot(room_id: int, snapshot_date: date) -> float | None:
     """Return one room's saved date-boundary meter reading."""
     initialize_database()
@@ -651,6 +773,39 @@ def get_today_reading_estimate(
     }
 
 
+def _calculate_daily_usage(
+    previous_kwh: float,
+    remaining_kwh: float,
+    payment_amount_yuan: float | None,
+    price_per_kwh: float,
+) -> dict[str, Any]:
+    """Calculate one day's usage from two balance snapshots."""
+    if payment_amount_yuan is None:
+        consumed_kwh = previous_kwh - remaining_kwh
+        if consumed_kwh < -0.001:
+            return {"status": "recharge_unverified"}
+        consumed_kwh = max(consumed_kwh, 0)
+        return {
+            "status": "estimated",
+            "consumed_kwh": round(consumed_kwh, 3),
+            "cost_yuan": round(consumed_kwh * price_per_kwh, 2),
+        }
+
+    consumed_kwh = previous_kwh + payment_amount_yuan / price_per_kwh - remaining_kwh
+    if consumed_kwh < -0.001:
+        return {
+            "status": "calculation_error",
+            "payment_amount_yuan": round(payment_amount_yuan, 2),
+        }
+    consumed_kwh = max(consumed_kwh, 0)
+    return {
+        "status": "complete",
+        "consumed_kwh": round(consumed_kwh, 3),
+        "cost_yuan": round(consumed_kwh * price_per_kwh, 2),
+        "payment_amount_yuan": round(payment_amount_yuan, 2),
+    }
+
+
 def save_electricity_daily_snapshot(
     room_id: int,
     *,
@@ -699,35 +854,12 @@ def save_electricity_daily_snapshot(
                 (room_id, previous_key),
             )
 
-        previous_kwh = float(previous["remaining_kwh"])
-        if payment_amount_yuan is None:
-            consumed_kwh = previous_kwh - remaining_kwh
-            if consumed_kwh < -0.001:
-                record = {"status": "recharge_unverified"}
-            else:
-                consumed_kwh = max(consumed_kwh, 0)
-                record = {
-                    "status": "estimated",
-                    "consumed_kwh": round(consumed_kwh, 3),
-                    "cost_yuan": round(consumed_kwh * price_per_kwh, 2),
-                }
-        else:
-            consumed_kwh = (
-                previous_kwh + payment_amount_yuan / price_per_kwh - remaining_kwh
-            )
-            if consumed_kwh < -0.001:
-                record = {
-                    "status": "calculation_error",
-                    "payment_amount_yuan": round(payment_amount_yuan, 2),
-                }
-            else:
-                consumed_kwh = max(consumed_kwh, 0)
-                record = {
-                    "status": "complete",
-                    "consumed_kwh": round(consumed_kwh, 3),
-                    "cost_yuan": round(consumed_kwh * price_per_kwh, 2),
-                    "payment_amount_yuan": round(payment_amount_yuan, 2),
-                }
+        record = _calculate_daily_usage(
+            float(previous["remaining_kwh"]),
+            remaining_kwh,
+            payment_amount_yuan,
+            price_per_kwh,
+        )
         connection.execute(
             """
             INSERT INTO room_daily_usage(
@@ -745,6 +877,87 @@ def save_electricity_daily_snapshot(
             ),
         )
     return record
+
+
+def recalculate_electricity_history(
+    room_id: int,
+    payment_amounts_yuan: Mapping[date, float],
+    price_per_kwh: float,
+) -> int:
+    """Recalculate all consecutive snapshot days with verified card payments.
+
+    ``payment_amounts_yuan`` must contain amounts from a successfully loaded
+    account history. A missing date is therefore a verified zero-payment day.
+    """
+    initialize_database()
+    with _connection() as connection:
+        snapshots = connection.execute(
+            """
+            SELECT snapshot_date, remaining_kwh
+            FROM room_snapshots
+            WHERE room_id = ?
+            ORDER BY snapshot_date
+            """,
+            (room_id,),
+        ).fetchall()
+        manual_rows = connection.execute(
+            """
+            SELECT date(paid_at, '+8 hours') AS paid_date,
+                   SUM(amount_yuan) AS amount_yuan
+            FROM room_manual_payments
+            WHERE room_id = ?
+            GROUP BY paid_date
+            """,
+            (room_id,),
+        ).fetchall()
+
+        manual_amounts = {
+            date.fromisoformat(str(row["paid_date"])): float(row["amount_yuan"])
+            for row in manual_rows
+        }
+        records: list[tuple[object, ...]] = []
+        for previous, current in pairwise(snapshots):
+            previous_date = date.fromisoformat(str(previous["snapshot_date"]))
+            snapshot_date = date.fromisoformat(str(current["snapshot_date"]))
+            if snapshot_date - previous_date != timedelta(days=1):
+                continue
+            usage_date = previous_date
+            payment_amount = round(
+                payment_amounts_yuan.get(usage_date, 0.0)
+                + manual_amounts.get(usage_date, 0.0),
+                2,
+            )
+            record = _calculate_daily_usage(
+                float(previous["remaining_kwh"]),
+                float(current["remaining_kwh"]),
+                payment_amount,
+                price_per_kwh,
+            )
+            records.append(
+                (
+                    room_id,
+                    usage_date.isoformat(),
+                    record["status"],
+                    record.get("consumed_kwh"),
+                    record.get("cost_yuan"),
+                    record.get("payment_amount_yuan"),
+                )
+            )
+        connection.executemany(
+            """
+            INSERT INTO room_daily_usage(
+                room_id, usage_date, status, consumed_kwh, cost_yuan,
+                payment_amount_yuan
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(room_id, usage_date) DO UPDATE SET
+                status = excluded.status,
+                consumed_kwh = excluded.consumed_kwh,
+                cost_yuan = excluded.cost_yuan,
+                payment_amount_yuan = excluded.payment_amount_yuan
+            """,
+            records,
+        )
+    return len(records)
 
 
 def get_daily_usage(room_id: int, usage_date: date) -> dict[str, Any] | None:

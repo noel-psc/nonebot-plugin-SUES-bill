@@ -145,6 +145,75 @@ def test_statistics_returns_highest_usage_day(room_id):
     }
 
 
+def test_recalculate_history_uses_verified_card_payments(room_id):
+    from nonebot_plugin_sues_bill.models import (
+        get_usage_statistics,
+        recalculate_electricity_history,
+        save_electricity_daily_snapshot,
+    )
+
+    save_electricity_daily_snapshot(
+        room_id,
+        snapshot_date=date(2026, 7, 17),
+        remaining_kwh=20,
+        payment_amount_yuan=None,
+        price_per_kwh=PRICE_PER_KWH,
+    )
+    save_electricity_daily_snapshot(
+        room_id,
+        snapshot_date=date(2026, 7, 18),
+        remaining_kwh=18,
+        payment_amount_yuan=None,
+        price_per_kwh=PRICE_PER_KWH,
+    )
+    save_electricity_daily_snapshot(
+        room_id,
+        snapshot_date=date(2026, 7, 19),
+        remaining_kwh=13,
+        payment_amount_yuan=None,
+        price_per_kwh=PRICE_PER_KWH,
+    )
+
+    recalculated = recalculate_electricity_history(
+        room_id,
+        {date(2026, 7, 18): 6.17},
+        PRICE_PER_KWH,
+    )
+
+    assert recalculated == 2
+    statistics = get_usage_statistics(room_id, 30, date(2026, 7, 20))
+    assert statistics["complete_days"] == 2
+    assert statistics["estimated_days"] == 0
+    assert statistics["total_kwh"] == 17.0
+
+
+def test_cached_payment_records_keep_a_bill_sync_watermark(room_id):
+    from nonebot_plugin_sues_bill.models import (
+        save_electricity_payment_sync,
+        get_electricity_payment_amount,
+        get_latest_electricity_bill_at,
+        save_electricity_payment_records,
+    )
+
+    paid_at = datetime(2026, 7, 18, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    save_electricity_payment_records(
+        room_id,
+        [
+            {
+                "source_key": "payment-1",
+                "paid_at": paid_at.isoformat(),
+                "amount_yuan": 6.17,
+            }
+        ],
+    )
+    save_electricity_payment_sync(room_id, paid_at)
+
+    assert get_electricity_payment_amount(room_id, date(2026, 7, 18)) == 6.17
+    assert get_latest_electricity_bill_at(room_id) == paid_at.astimezone(
+        ZoneInfo("UTC")
+    )
+
+
 def test_record_statistics_accepts_compact_and_spaced_days():
     from nonebot_plugin_sues_bill.electric import parse_statistics_days
 
@@ -307,7 +376,7 @@ def test_manual_entries_are_stored_in_shanghai_time_and_recalculate_usage(room_i
 def test_room_description_masks_the_room_number():
     from nonebot_plugin_sues_bill.electric import describe_room
 
-    assert describe_room(QUERY_PARAMS) == "三期21栋****"
+    assert describe_room(QUERY_PARAMS) == "三期2*栋1**1"
 
 
 @pytest.mark.asyncio

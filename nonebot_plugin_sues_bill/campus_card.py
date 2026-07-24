@@ -1,7 +1,8 @@
 """校园卡余额查询模块"""
 
 import re
-import asyncio
+import json
+import hashlib
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -239,10 +240,14 @@ async def query_balance(client: httpx.AsyncClient) -> dict:
         return {"retcode": -1, "retmsg": f"查询失败: {e}"}
 
 
-async def query_electric_payment_amount(
-    client: httpx.AsyncClient, target_date: date
+async def query_electric_payment_records(
+    client: httpx.AsyncClient, since: datetime | None = None
 ) -> dict:
-    """查询指定自然日内成功的电费缴费金额。"""
+    """Load new electricity-payment records from reverse-chronological bills.
+
+    The endpoint has no time-range parameter. After the first full sync, pages
+    older than the newest cached payment are not requested.
+    """
 
     async def load_page(page_no: int) -> dict:
         resp = await client.get(
@@ -260,31 +265,75 @@ async def query_electric_payment_amount(
             return {"retcode": -1, "retmsg": first_page.get("retmsg", "账单查询失败")}
 
         total_pages = max(int(first_page.get("totalpage", 1)), 1)
-        other_pages = await asyncio.gather(
-            *(load_page(page_no) for page_no in range(2, total_pages + 1))
-        )
-        records = list(first_page.get("dtls", []))
-        for page in other_pages:
-            if page.get("retcode") == 0:
-                records.extend(page.get("dtls", []))
-
-        amount = 0.0
-        for record in records:
-            is_successful_electricity_payment = (
-                record.get("tradename") == "电费缴费"
-                and int(record.get("status", -1)) == 2
-            )
-            if not is_successful_electricity_payment:
-                continue
-            created_at = datetime.fromtimestamp(
-                float(record["createtime"]) / 1000, tz=SHANGHAI_TZ
-            )
-            if created_at.date() == target_date:
-                amount += float(record["amount"])
-        return {"retcode": 0, "amount": round(amount, 2)}
+        records: list[dict[str, object]] = []
+        page = first_page
+        newest_at: datetime | None = None
+        for page_no in range(1, total_pages + 1):
+            if page_no > 1:
+                page = await load_page(page_no)
+                if page.get("retcode") != 0:
+                    return {"retcode": -1, "retmsg": "账单查询失败"}
+            page_records = page.get("dtls", [])
+            oldest_at: datetime | None = None
+            for record in page_records:
+                created_at = datetime.fromtimestamp(
+                    float(record["createtime"]) / 1000, tz=SHANGHAI_TZ
+                )
+                if newest_at is None or created_at > newest_at:
+                    newest_at = created_at
+                if oldest_at is None or created_at < oldest_at:
+                    oldest_at = created_at
+                if (
+                    record.get("tradename") != "电费缴费"
+                    or int(record.get("status", -1)) != 2
+                ):
+                    continue
+                source_key = hashlib.sha256(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True).encode()
+                ).hexdigest()
+                records.append(
+                    {
+                        "source_key": source_key,
+                        "paid_at": created_at.isoformat(),
+                        "amount_yuan": float(record["amount"]),
+                    }
+                )
+            if since is not None and oldest_at is not None and oldest_at < since:
+                break
+        return {
+            "retcode": 0,
+            "records": records,
+            "latest_bill_at": newest_at.isoformat() if newest_at else None,
+        }
     except (KeyError, TypeError, ValueError, httpx.HTTPError) as e:
         logger.error(f"缴费记录查询失败: {e}")
         return {"retcode": -1, "retmsg": "缴费记录查询失败"}
+
+
+async def query_electric_payment_amounts(client: httpx.AsyncClient) -> dict:
+    """查询账单中所有成功的电费缴费，并按上海自然日汇总。"""
+    result = await query_electric_payment_records(client)
+    if result.get("retcode") != 0:
+        return result
+    amounts: dict[date, float] = {}
+    for record in result["records"]:
+        paid_at = datetime.fromisoformat(str(record["paid_at"]))
+        payment_date = paid_at.astimezone(SHANGHAI_TZ).date()
+        amounts[payment_date] = amounts.get(payment_date, 0.0) + float(
+            record["amount_yuan"]
+        )
+    return {"retcode": 0, "amounts": amounts}
+
+
+async def query_electric_payment_amount(
+    client: httpx.AsyncClient, target_date: date
+) -> dict:
+    """查询指定自然日内成功的电费缴费金额。"""
+    result = await query_electric_payment_amounts(client)
+    if result.get("retcode") != 0:
+        return result
+    amounts: dict[date, float] = result["amounts"]
+    return {"retcode": 0, "amount": amounts.get(target_date, 0.0)}
 
 
 # ─── 处理器 ───────────────────────────────────────────────

@@ -20,14 +20,24 @@ from .models import (
     record_electricity_query,
     get_today_reading_estimate,
     bind_account_to_subscription,
+    save_electricity_payment_sync,
+    get_electricity_payment_amount,
+    get_latest_electricity_bill_at,
     subscription_has_bound_account,
+    get_electricity_payment_amounts,
+    recalculate_electricity_history,
     save_electricity_daily_snapshot,
+    save_electricity_payment_records,
     unbind_account_from_subscription,
     record_manual_electricity_payment,
     record_manual_electricity_reading,
     get_manual_electricity_payment_amount,
 )
-from .campus_card import login, load_bound_accounts, query_electric_payment_amount
+from .campus_card import (
+    login,
+    load_bound_accounts,
+    query_electric_payment_records,
+)
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -115,7 +125,14 @@ def describe_room(query_params: dict[str, str]) -> str:
         ),
         "?",
     )
-    return f"{area_name}{build_num}栋****"
+    masked_building = f"{build_num[:-1]}*" if build_num != "?" else "*"
+    room_id = query_params["roomid"]
+    masked_room = (
+        f"{room_id[0]}{'*' * (len(room_id) - 2)}{room_id[-1]}"
+        if len(room_id) > 2
+        else room_id
+    )
+    return f"{area_name}{masked_building}栋{masked_room}"
 
 
 async def query_electric_bill(sysid: str, roomid: str, areaid: str, buildid: str):
@@ -154,25 +171,40 @@ electric_help_detail = on_command("电费详细帮助", priority=5, block=True)
 
 async def query_bound_payment_amount(room_id: int, target_date: date) -> float | None:
     """Return all explicitly bound account payments, or None if verification fails."""
+    if not await sync_bound_payment_records(room_id):
+        return None
+    return await asyncio.to_thread(get_electricity_payment_amount, room_id, target_date)
+
+
+async def sync_bound_payment_records(room_id: int) -> bool:
+    """Incrementally cache the bound account's verified electricity payments."""
     accounts = await asyncio.to_thread(load_bound_accounts, room_id)
     if not accounts:
-        return None
+        return False
 
-    amount = 0.0
+    latest_bill_at = await asyncio.to_thread(get_latest_electricity_bill_at, room_id)
     for account in accounts:
         client = await login(account["username"], account["password"])
         if client is None:
             logger.warning(f"宿舍 {room_id} 的绑定校园卡登录失败")
-            return None
+            return False
         try:
-            result = await query_electric_payment_amount(client, target_date)
+            result = await query_electric_payment_records(client, latest_bill_at)
         finally:
             await client.aclose()
         if result.get("retcode") != 0:
             logger.warning(f"宿舍 {room_id} 的绑定校园卡流水查询失败")
-            return None
-        amount += float(result["amount"])
-    return round(amount, 2)
+            return False
+        await asyncio.to_thread(
+            save_electricity_payment_records, room_id, result["records"]
+        )
+        if result["latest_bill_at"] is not None:
+            await asyncio.to_thread(
+                save_electricity_payment_sync,
+                room_id,
+                datetime.fromisoformat(result["latest_bill_at"]),
+            )
+    return True
 
 
 async def query_total_payment_amount(room_id: int, target_date: date) -> float | None:
@@ -186,6 +218,19 @@ async def query_total_payment_amount(room_id: int, target_date: date) -> float |
     if manual_amount is None:
         return bound_amount
     return round(bound_amount + manual_amount, 2)
+
+
+async def recalculate_bound_history(room_id: int) -> int | None:
+    """Recalculate every stored day when its bound card history is verified."""
+    if not await sync_bound_payment_records(room_id):
+        return None
+    amounts = await asyncio.to_thread(get_electricity_payment_amounts, room_id)
+    return await asyncio.to_thread(
+        recalculate_electricity_history,
+        room_id,
+        amounts,
+        config.electricity_price_per_kwh,
+    )
 
 
 async def settle_room_electricity(room: dict[str, object], snapshot_date: date) -> None:
@@ -244,11 +289,14 @@ def record_help() -> str:
 
 def account_correction_tip(has_bound_account: bool) -> str:
     if has_bound_account:
-        return "账户校正：已绑定校园卡账户，缴费日会按流水校正。"
+        return (
+            "账户校正：已绑定校园卡账户，历史及后续记录会按流水校正。\n"
+            "前提：该校园卡仅给此宿舍缴费，且此宿舍仅由该校园卡缴费。"
+        )
     return (
         "账户校正：未绑定，缴费日可能不准确。\n"
         "如需校正，请先私聊发送 #设置校园卡账号 学号 密码，"
-        "再发送 #电费 记录 绑定。"
+        "再发送 #电费 记录 绑定；校正前提是一卡一房、该卡仅为该房缴费。"
     )
 
 
@@ -284,7 +332,8 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
         return (
             f"已设置记录宿舍：{describe_room(query_params)}\n"
             "每天 00:00 会查询并结算昨日耗电。\n"
-            "如需缴费日精确校正，请先私聊设置校园卡账号，再发送 #电费 记录 绑定。"
+            "如需缴费日精确校正，请先私聊设置校园卡账号，再发送 #电费 记录 绑定。\n"
+            "校正前提：绑定卡仅为本宿舍缴费，且本宿舍仅由此卡缴费。"
         )
     if action == "状态":
         return await get_record_status_message(user_id)
@@ -297,8 +346,21 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
         )
     if action == "绑定":
         result = await asyncio.to_thread(bind_account_to_subscription, user_id)
+        if result == "bound":
+            subscription = await asyncio.to_thread(get_room_subscription, user_id)
+            assert subscription is not None
+            recalculated_days = await recalculate_bound_history(subscription["room_id"])
+            correction_note = (
+                f"已按账单流水校正 {recalculated_days} 天历史记录。"
+                if recalculated_days is not None
+                else "暂未能读取账单流水，历史记录会在下次成功绑定时校正。"
+            )
+            return (
+                "已绑定校园卡账户到记录宿舍。\n"
+                f"{correction_note}\n"
+                "校正前提：该账户仅给此宿舍缴费，且此宿舍仅由该账户缴费。"
+            )
         messages = {
-            "bound": "已绑定校园卡账户到记录宿舍；该账户之后只能校正这一间宿舍。",
             "no_subscription": "请先设置记录宿舍：#电费 记录 三期 21 1001",
             "no_account": "请先私聊设置校园卡账号：#设置校园卡账号 学号 密码",
             "room_bound": "该记录宿舍已绑定其他校园卡账户，请先由原账户解绑。",
@@ -556,7 +618,8 @@ async def handle_electric_help(
         "#电费 - 查询记录宿舍当前余额\n"
         "#电费 区域 楼栋 房间号 - 即时查询余额\n\n"
         f"{record_help()}\n\n"
-        "定时日结在每日 00:00 执行；绑定账户后可用缴费流水校正。\n"
+        "定时日结在每日 00:00 执行；绑定账户后可用缴费流水校正历史及后续记录。\n"
+        "校正前提：该校园卡只给这一间宿舍缴费，且该宿舍只由这张卡缴费。\n"
         "三期：10-26栋；四期：20、21、23、24、27-30、33-36、39-42栋"
     )
 
