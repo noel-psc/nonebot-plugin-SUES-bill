@@ -1,6 +1,5 @@
 import re
 import asyncio
-from hashlib import sha256
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -31,8 +30,6 @@ from nonebot_plugin_apscheduler import scheduler
 
 config = get_plugin_config(Config)
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-MAX_SCHEDULED_QUERIES = 10
-SETTLEMENT_WINDOW_SECONDS = 20 * 60
 MAX_STATISTICS_DAYS = 3650
 
 AREA_MAP = {
@@ -151,12 +148,6 @@ electric_help = on_command("电费帮助", priority=5, block=True)
 electric_help_detail = on_command("电费详细帮助", priority=5, block=True)
 
 
-def get_settlement_delay_seconds(room_id: int) -> int:
-    """Stably distribute rooms across the 23:50 to 00:10 window."""
-    digest = sha256(str(room_id).encode()).digest()
-    return int.from_bytes(digest[:4], "big") % (SETTLEMENT_WINDOW_SECONDS + 1)
-
-
 async def query_bound_payment_amount(room_id: int, target_date: date) -> float | None:
     """Return all explicitly bound account payments, or None if verification fails."""
     accounts = await asyncio.to_thread(load_bound_accounts, room_id)
@@ -210,21 +201,15 @@ async def settle_room_electricity(room: dict[str, object], snapshot_date: date) 
 
 
 @scheduler.scheduled_job(
-    "cron", hour=23, minute=50, timezone="Asia/Shanghai", id="sues_daily_electricity"
+    "cron", hour=0, minute=0, timezone="Asia/Shanghai", id="sues_daily_electricity"
 )
 async def settle_daily_electricity() -> None:
-    """Settle all subscribed rooms once, staggered around the date boundary."""
-    snapshot_date = (datetime.now(SHANGHAI_TZ) + timedelta(minutes=10)).date()
+    """Settle all subscribed rooms immediately at the date boundary."""
+    snapshot_date = datetime.now(SHANGHAI_TZ).date()
     rooms = await asyncio.to_thread(get_scheduled_rooms)
-    semaphore = asyncio.Semaphore(MAX_SCHEDULED_QUERIES)
-
-    async def settle_with_limit(room: dict[str, object]) -> None:
-        await asyncio.sleep(get_settlement_delay_seconds(int(str(room["room_id"]))))
-        async with semaphore:
-            await settle_room_electricity(room, snapshot_date)
-
     await asyncio.gather(
-        *(settle_with_limit(room) for room in rooms), return_exceptions=True
+        *(settle_room_electricity(room, snapshot_date) for room in rooms),
+        return_exceptions=True,
     )
 
 
@@ -270,7 +255,7 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
         await asyncio.to_thread(set_room_subscription, user_id, query_params)
         return (
             f"已设置记录宿舍：{describe_room(query_params)}\n"
-            "每天 00:00 前后会错峰结算昨日耗电。"
+            "每天 00:00 会查询并结算昨日耗电。"
         )
     if action == "状态":
         return await get_record_status_message(user_id)
@@ -433,7 +418,7 @@ async def handle_electric_help(
         "#电费 - 查询记录宿舍当前余额\n"
         "#电费 区域 楼栋 房间号 - 即时查询余额\n\n"
         f"{record_help()}\n\n"
-        "定时日结在每日 00:00 前后错峰执行；绑定账户后可用缴费流水校正。\n"
+        "定时日结在每日 00:00 执行；绑定账户后可用缴费流水校正。\n"
         "三期：10-26栋；四期：20、21、23、24、27-30、33-36、39-42栋"
     )
 

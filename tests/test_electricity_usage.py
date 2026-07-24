@@ -253,3 +253,28 @@ def test_today_readings_do_not_affect_completed_day_statistics(room_id):
     statistics = models.get_usage_statistics(room_id, 1, date(2026, 7, 20))
 
     assert statistics["valid_days"] == 0
+
+
+@pytest.mark.asyncio
+async def test_daily_settlement_starts_all_rooms_without_stagger(monkeypatch):
+    from nonebot_plugin_sues_bill import electric
+
+    rooms = [
+        {**QUERY_PARAMS, "room_id": 1},
+        {**QUERY_PARAMS, "room_id": 2, "roomid": "1002"},
+    ]
+    settled_room_ids: list[int] = []
+
+    async def unexpected_sleep(_: float) -> None:
+        pytest.fail("日界结算不应再错峰等待")
+
+    async def settle(room, snapshot_date):
+        settled_room_ids.append(room["room_id"])
+
+    monkeypatch.setattr(electric, "get_scheduled_rooms", lambda: rooms)
+    monkeypatch.setattr(electric, "settle_room_electricity", settle)
+    monkeypatch.setattr(electric.asyncio, "sleep", unexpected_sleep)
+
+    await electric.settle_daily_electricity()
+
+    assert settled_room_ids == [1, 2]
