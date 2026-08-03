@@ -1,7 +1,9 @@
 """校园卡余额查询模块"""
 
 import re
+import json
 import asyncio
+import hashlib
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -20,7 +22,10 @@ from .config import (
     BILL_LOAD_PATH,
     BILL_PAGE_PATH,
     REQUEST_TIMEOUT,
+    ELECTRIC_PAYBILL_PATH,
     CAMPUS_CARD_INDEX_PATH,
+    ELECTRIC_RECHARGE_PATH,
+    ELECTRIC_PAY_CONFIRM_PATH,
     Config,
 )
 from .models import (
@@ -28,6 +33,7 @@ from .models import (
     load_campus_card_account,
     save_campus_card_account,
     get_bound_accounts_for_room,
+    subscription_has_bound_account,
 )
 
 config = get_plugin_config(Config)
@@ -109,6 +115,19 @@ def save_account(user_id: str, username: str, password: str) -> bool:
     """保存指定用户的校园卡账号（密码加密存储）"""
     encrypted = _encrypt_password(password)
     return save_campus_card_account(user_id, username, encrypted)
+
+
+def account_saved_message(username: str, has_bound_account: bool) -> str:
+    """Describe whether updated credentials still need an explicit room binding."""
+    if has_bound_account:
+        return (
+            f"校园卡账号更新成功！学号: {username}\n"
+            "原记录宿舍绑定已保留，统计时会自动同步账单并校正历史。"
+        )
+    return (
+        f"校园卡账号设置成功！学号: {username}\n"
+        "如需校正记录宿舍的缴费，请再发送：#电费 记录 绑定"
+    )
 
 
 # ─── 工具函数 ─────────────────────────────────────────────
@@ -239,10 +258,14 @@ async def query_balance(client: httpx.AsyncClient) -> dict:
         return {"retcode": -1, "retmsg": f"查询失败: {e}"}
 
 
-async def query_electric_payment_amount(
-    client: httpx.AsyncClient, target_date: date
+async def query_electric_payment_records(
+    client: httpx.AsyncClient, since: datetime | None = None
 ) -> dict:
-    """查询指定自然日内成功的电费缴费金额。"""
+    """Load new electricity-payment records from reverse-chronological bills.
+
+    The endpoint has no time-range parameter. After the first full sync, pages
+    older than the newest cached payment are not requested.
+    """
 
     async def load_page(page_no: int) -> dict:
         resp = await client.get(
@@ -250,41 +273,213 @@ async def query_electric_payment_amount(
             params={"pageno": page_no},
         )
         resp.raise_for_status()
-        return resp.json()
+        response_text = resp.text.lstrip()
+        if response_text.startswith("<"):
+            reason = (
+                "账单登录状态已过期"
+                if "登录已过期" in response_text
+                else "账单接口返回网页而非数据"
+            )
+            logger.error(
+                f"{reason}: status={resp.status_code}, "
+                f"content_type={resp.headers.get('content-type', 'unknown')}"
+            )
+            return {"retcode": -1, "retmsg": reason}
+        try:
+            payload = json.loads(response_text, strict=False)
+        except json.JSONDecodeError as error:
+            logger.error(
+                "账单接口返回无效 JSON: "
+                f"status={resp.status_code}, content_type="
+                f"{resp.headers.get('content-type', 'unknown')}, "
+                f"line={error.lineno}, column={error.colno}"
+            )
+            return {"retcode": -1, "retmsg": "账单接口返回无效数据"}
+        return (
+            payload
+            if isinstance(payload, dict)
+            else {
+                "retcode": -1,
+                "retmsg": "账单接口返回无效数据",
+            }
+        )
 
     try:
         bill_page = await client.get(config.sues_base_url + BILL_PAGE_PATH)
         bill_page.raise_for_status()
+        if "登录已过期" in bill_page.text:
+            return {"retcode": -1, "retmsg": "账单登录状态已过期"}
         first_page = await load_page(1)
         if first_page.get("retcode") != 0:
             return {"retcode": -1, "retmsg": first_page.get("retmsg", "账单查询失败")}
 
         total_pages = max(int(first_page.get("totalpage", 1)), 1)
-        other_pages = await asyncio.gather(
-            *(load_page(page_no) for page_no in range(2, total_pages + 1))
-        )
-        records = list(first_page.get("dtls", []))
-        for page in other_pages:
-            if page.get("retcode") == 0:
-                records.extend(page.get("dtls", []))
-
-        amount = 0.0
-        for record in records:
-            is_successful_electricity_payment = (
-                record.get("tradename") == "电费缴费"
-                and int(record.get("status", -1)) == 2
-            )
-            if not is_successful_electricity_payment:
-                continue
-            created_at = datetime.fromtimestamp(
-                float(record["createtime"]) / 1000, tz=SHANGHAI_TZ
-            )
-            if created_at.date() == target_date:
-                amount += float(record["amount"])
-        return {"retcode": 0, "amount": round(amount, 2)}
+        records: list[dict[str, object]] = []
+        page = first_page
+        newest_at: datetime | None = None
+        for page_no in range(1, total_pages + 1):
+            if page_no > 1:
+                page = await load_page(page_no)
+                if page.get("retcode") != 0:
+                    return {"retcode": -1, "retmsg": "账单查询失败"}
+            page_records = page.get("dtls", [])
+            oldest_at: datetime | None = None
+            for record in page_records:
+                created_at = datetime.fromtimestamp(
+                    float(record["createtime"]) / 1000, tz=SHANGHAI_TZ
+                )
+                if newest_at is None or created_at > newest_at:
+                    newest_at = created_at
+                if oldest_at is None or created_at < oldest_at:
+                    oldest_at = created_at
+                if (
+                    record.get("tradename") != "电费缴费"
+                    or int(record.get("status", -1)) != 2
+                ):
+                    continue
+                source_key = hashlib.sha256(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True).encode()
+                ).hexdigest()
+                records.append(
+                    {
+                        "source_key": source_key,
+                        "billno": str(record.get("id", "")),
+                        "paid_at": created_at.isoformat(),
+                        "amount_yuan": float(record["amount"]),
+                    }
+                )
+            if since is not None and oldest_at is not None and oldest_at < since:
+                break
+        return {
+            "retcode": 0,
+            "records": records,
+            "latest_bill_at": newest_at.isoformat() if newest_at else None,
+        }
     except (KeyError, TypeError, ValueError, httpx.HTTPError) as e:
         logger.error(f"缴费记录查询失败: {e}")
         return {"retcode": -1, "retmsg": "缴费记录查询失败"}
+
+
+async def query_electric_payment_amounts(client: httpx.AsyncClient) -> dict:
+    """查询账单中所有成功的电费缴费，并按上海自然日汇总。"""
+    result = await query_electric_payment_records(client)
+    if result.get("retcode") != 0:
+        return result
+    amounts: dict[date, float] = {}
+    for record in result["records"]:
+        paid_at = datetime.fromisoformat(str(record["paid_at"]))
+        payment_date = paid_at.astimezone(SHANGHAI_TZ).date()
+        amounts[payment_date] = amounts.get(payment_date, 0.0) + float(
+            record["amount_yuan"]
+        )
+    return {"retcode": 0, "amounts": amounts}
+
+
+async def query_electric_payment_amount(
+    client: httpx.AsyncClient, target_date: date
+) -> dict:
+    """查询指定自然日内成功的电费缴费金额。"""
+    result = await query_electric_payment_amounts(client)
+    if result.get("retcode") != 0:
+        return result
+    amounts: dict[date, float] = result["amounts"]
+    return {"retcode": 0, "amount": amounts.get(target_date, 0.0)}
+
+
+# ─── 电费充值 ─────────────────────────────────────────────
+
+
+def _extract_hidden_input(page_text: str, field_id: str) -> str | None:
+    match = re.search(
+        rf'<input\s+type="hidden"\s+id="{re.escape(field_id)}"\s+value="([^"]+)"',
+        page_text,
+    )
+    return match.group(1) if match else None
+
+
+def _extract_csrf(page_text: str) -> str | None:
+    match = re.search(r'<meta name="_csrf" content="([^"]+)"', page_text)
+    return match.group(1) if match else None
+
+
+def _extract_csrf_header(page_text: str) -> str:
+    match = re.search(r'<meta name="_csrf_header" content="([^"]+)"', page_text)
+    return match.group(1) if match else "X-CSRF-TOKEN"
+
+
+async def recharge_electricity(
+    client: httpx.AsyncClient,
+    query_params: dict[str, str],
+    amount_yuan: float,
+) -> dict:
+    """从校园卡余额直接为指定宿舍充值电费，无需额外密码。
+
+    流程：查询当前剩余电量 → 生成缴费订单 → 确认支付（账户余额扣款）。
+    """
+    params = {
+        key: str(query_params[key]) for key in ("sysid", "roomid", "areaid", "buildid")
+    }
+    try:
+        ele_result = await client.get(
+            config.sues_base_url + ELECTRIC_RECHARGE_PATH, params=params
+        )
+        ele_result.raise_for_status()
+        rest_match = re.search(r'left-degree="([\d.]+)"', ele_result.text)
+        rest = rest_match.group(1) if rest_match else ""
+
+        pay_params = {**params, "amount": f"{amount_yuan:g}", "rest": rest}
+        paybill_page = await client.get(
+            config.sues_base_url + ELECTRIC_PAYBILL_PATH, params=pay_params
+        )
+        paybill_page.raise_for_status()
+        billno = _extract_hidden_input(paybill_page.text, "billno")
+        refno = _extract_hidden_input(paybill_page.text, "refno")
+        csrf_token = _extract_csrf(paybill_page.text)
+        if not billno or not refno or not csrf_token:
+            reason = (
+                "登录状态已过期，请重新设置校园卡账号"
+                if any(
+                    keyword in paybill_page.text
+                    for keyword in ("登录失效", "登陆失败", "无权限访问", "登录已过期")
+                )
+                else "缴费订单生成失败"
+            )
+            logger.error(f"缴费订单页解析失败: {reason}")
+            return {"retcode": -1, "retmsg": reason}
+
+        csrf_header = _extract_csrf_header(paybill_page.text)
+        headers = {csrf_header: csrf_token}
+        confirm = await client.post(
+            config.sues_base_url + ELECTRIC_PAY_CONFIRM_PATH,
+            data={"billno": billno, "refno": refno},
+            headers=headers,
+        )
+        confirm.raise_for_status()
+        try:
+            payload = json.loads(confirm.text)
+        except json.JSONDecodeError:
+            logger.error("缴费确认返回非 JSON 响应")
+            return {"retcode": -1, "retmsg": "缴费确认响应异常"}
+        if payload.get("retcode") != "0":
+            return {
+                "retcode": -1,
+                "retmsg": str(payload.get("retmsg", "缴费失败")),
+            }
+        return {
+            "retcode": 0,
+            "billno": billno,
+            "refno": refno,
+            "amount_yuan": amount_yuan,
+        }
+    except httpx.TimeoutException:
+        logger.error("电费缴费超时")
+        return {"retcode": -1, "retmsg": "缴费超时"}
+    except httpx.HTTPError as e:
+        logger.error(f"电费缴费请求失败: {e}")
+        return {"retcode": -1, "retmsg": "缴费请求失败"}
+    except Exception as e:
+        logger.error(f"电费缴费异常: {e}")
+        return {"retcode": -1, "retmsg": f"缴费异常: {e}"}
 
 
 # ─── 处理器 ───────────────────────────────────────────────
@@ -344,9 +539,11 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
     if len(parts) < 2:
         await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
 
-    if not save_account(event.get_user_id(), parts[0], parts[1]):
+    user_id = event.get_user_id()
+    if not save_account(user_id, parts[0], parts[1]):
         await campus_card_set.finish("该校园卡账号已由其他用户设置，不能重复绑定")
-    await campus_card_set.finish(f"校园卡账号设置成功！学号: {parts[0]}")
+    has_bound_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
+    await campus_card_set.finish(account_saved_message(parts[0], has_bound_account))
 
 
 @campus_card_help.handle()
@@ -359,5 +556,6 @@ async def handle_campus_card_help(bot: Bot, event: Event, args: Message = Comman
         "#校园卡 — 查询余额\n"
         "#校园卡帮助 — 查看帮助\n\n"
         "【首次使用】\n"
-        "私聊发送：#设置校园卡账号 学号 密码"
+        "私聊发送：#设置校园卡账号 学号 密码\n"
+        "如需校正电费缴费，设置记录宿舍后再发送：#电费 记录 绑定"
     )

@@ -27,6 +27,11 @@ REQUEST_TIMEOUT = 10
 # 电费查询
 ELECTRIC_QUERY_PATH = "/epay/wxpage/wanxiao/eleresult"
 
+# 电费充值（H5）
+ELECTRIC_RECHARGE_PATH = "/epay/h5/eleresult"
+ELECTRIC_PAYBILL_PATH = "/epay/h5/elepaybill"
+ELECTRIC_PAY_CONFIRM_PATH = "/epay/h5/payconfirm.json"
+
 # 缴费账单
 BILL_PAGE_PATH = "/epay/h5/bill"
 BILL_LOAD_PATH = "/epay/h5/loadbill.json"
