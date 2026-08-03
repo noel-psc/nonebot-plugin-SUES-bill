@@ -540,9 +540,7 @@ async def handle_payment_command(user_id: str, arguments: str) -> str:
     )
 
 
-async def execute_payment(
-    user_id: str, pending: dict[str, object]
-) -> str:
+async def execute_payment(user_id: str, pending: dict[str, object]) -> str:
     query_params = pending["query_params"]
     amount = pending["amount"]
     assert isinstance(query_params, dict)

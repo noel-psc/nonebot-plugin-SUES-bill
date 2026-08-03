@@ -47,16 +47,12 @@ async def test_recharge_electricity_pays_from_balance(monkeypatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if request.url.path.endswith("/eleresult"):
-            return httpx.Response(
-                200, text='<input id="roomdef" left-degree="16.0">'
-            )
+            return httpx.Response(200, text='<input id="roomdef" left-degree="16.0">')
         if request.url.path.endswith("/elepaybill"):
             assert request.url.params["amount"] == "50"
             return httpx.Response(
                 200,
-                text=_recharge_paybill_page(
-                    "bill-123", "ref-456", "csrf-token-789"
-                ),
+                text=_recharge_paybill_page("bill-123", "ref-456", "csrf-token-789"),
             )
         if request.url.path.endswith("/payconfirm.json"):
             assert request.headers.get("X-CSRF-TOKEN") == "csrf-token-789"
@@ -66,9 +62,7 @@ async def test_recharge_electricity_pays_from_balance(monkeypatch):
 
     monkeypatch.setattr(campus_card.config, "sues_base_url", "https://example.test")
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await campus_card.recharge_electricity(
-            client, QUERY_PARAMS, 50.0
-        )
+        result = await campus_card.recharge_electricity(client, QUERY_PARAMS, 50.0)
 
     assert result == {
         "retcode": 0,
@@ -96,16 +90,12 @@ async def test_recharge_electricity_reports_insufficient_balance(monkeypatch):
                 text=_recharge_paybill_page("bill-1", "ref-2", "csrf-3"),
             )
         if request.url.path.endswith("/payconfirm.json"):
-            return httpx.Response(
-                200, json={"retcode": "-1", "retmsg": "账户余额不足"}
-            )
+            return httpx.Response(200, json={"retcode": "-1", "retmsg": "账户余额不足"})
         raise AssertionError(f"unexpected request: {request.url}")
 
     monkeypatch.setattr(campus_card.config, "sues_base_url", "https://example.test")
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await campus_card.recharge_electricity(
-            client, QUERY_PARAMS, 50.0
-        )
+        result = await campus_card.recharge_electricity(client, QUERY_PARAMS, 50.0)
 
     assert result == {"retcode": -1, "retmsg": "账户余额不足"}
 
@@ -130,9 +120,7 @@ async def test_recharge_electricity_handles_expired_session(monkeypatch, body):
 
     monkeypatch.setattr(campus_card.config, "sues_base_url", "https://example.test")
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await campus_card.recharge_electricity(
-            client, QUERY_PARAMS, 50.0
-        )
+        result = await campus_card.recharge_electricity(client, QUERY_PARAMS, 50.0)
 
     assert result == {"retcode": -1, "retmsg": "登录状态已过期，请重新设置校园卡账号"}
 
@@ -755,9 +743,7 @@ def test_synced_payments_route_to_owning_room(monkeypatch, tmp_path):
     assert models.get_electricity_payment_amount(bound_room, date(2026, 8, 4)) == 30.0
 
 
-def test_synced_payments_remove_manual_copy_from_owning_room(
-    monkeypatch, tmp_path
-):
+def test_synced_payments_remove_manual_copy_from_owning_room(monkeypatch, tmp_path):
     from datetime import datetime
 
     from nonebot_plugin_sues_bill import models, electric
@@ -771,8 +757,7 @@ def test_synced_payments_remove_manual_copy_from_owning_room(
     paid_at = datetime(2026, 8, 4, 10, 0, tzinfo=UTC)
     models.record_manual_electricity_payment(QUERY_PARAMS, paid_at, 50.0)
     assert (
-        models.get_manual_electricity_payment_amount(room_id, date(2026, 8, 4))
-        == 50.0
+        models.get_manual_electricity_payment_amount(room_id, date(2026, 8, 4)) == 50.0
     )
 
     electric.route_synced_payment_records(
@@ -788,6 +773,5 @@ def test_synced_payments_remove_manual_copy_from_owning_room(
     )
 
     assert (
-        models.get_manual_electricity_payment_amount(room_id, date(2026, 8, 4))
-        is None
+        models.get_manual_electricity_payment_amount(room_id, date(2026, 8, 4)) is None
     )
