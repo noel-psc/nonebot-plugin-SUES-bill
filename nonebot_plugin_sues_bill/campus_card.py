@@ -343,6 +343,7 @@ async def query_electric_payment_records(
                 records.append(
                     {
                         "source_key": source_key,
+                        "billno": str(record.get("id", "")),
                         "paid_at": created_at.isoformat(),
                         "amount_yuan": float(record["amount"]),
                     }

@@ -150,6 +150,11 @@ CREATE TABLE IF NOT EXISTS room_electricity_payment_syncs (
     room_id INTEGER PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     latest_bill_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS recharge_bills (
+    billno TEXT PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS room_daily_usage (
     room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     usage_date TEXT NOT NULL,
@@ -646,6 +651,65 @@ def save_electricity_payment_sync(room_id: int, latest_bill_at: datetime) -> Non
             """,
             (room_id, value),
         )
+
+
+def record_recharge_bill(billno: str, room_id: int) -> None:
+    """Remember which room a recharge bill belongs to."""
+    initialize_database()
+    with _connection() as connection:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO recharge_bills(billno, room_id)
+            VALUES (?, ?)
+            """,
+            (billno, room_id),
+        )
+
+
+def get_recharge_bill_room(billno: str) -> int | None:
+    """Return the room a recharge bill was placed for, if known."""
+    initialize_database()
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT room_id FROM recharge_bills WHERE billno = ?",
+            (billno,),
+        ).fetchone()
+    return int(row["room_id"]) if row is not None else None
+
+
+def remove_confirmed_manual_payments(
+    room_id: int, records: Iterable[Mapping[str, object]]
+) -> None:
+    """Drop manual payments now confirmed by the server's bill records.
+
+    A recharge done inside the plugin is first stored as a manual payment so
+    rooms without a bound account still correct their statistics. Once the
+    bound account's bill sync returns the same charge, the manual copy would
+    double-count and is removed. Matches on amount and a small time window.
+    """
+    confirmed = [
+        (
+            datetime.fromisoformat(str(record["paid_at"]))
+            .astimezone(UTC)
+            .strftime("%Y-%m-%d %H:%M:%S"),
+            round(float(str(record["amount_yuan"])), 2),
+        )
+        for record in records
+    ]
+    if not confirmed:
+        return
+    initialize_database()
+    with _connection() as connection:
+        for paid_at, amount in confirmed:
+            connection.execute(
+                """
+                DELETE FROM room_manual_payments
+                WHERE room_id = ? AND amount_yuan = ?
+                  AND paid_at >= datetime(?, '-5 minutes')
+                  AND paid_at <= datetime(?, '+5 minutes')
+                """,
+                (room_id, amount, paid_at, paid_at),
+            )
 
 
 def get_electricity_payment_amount(room_id: int, target_date: date) -> float:

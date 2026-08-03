@@ -2,6 +2,7 @@ import re
 import asyncio
 from datetime import date, time, datetime, timedelta
 from zoneinfo import ZoneInfo
+from collections.abc import Mapping, Iterable
 
 import httpx
 from nonebot import logger, require, get_driver, on_command, get_plugin_config
@@ -13,8 +14,10 @@ from .config import USER_AGENT, REQUEST_TIMEOUT, ELECTRIC_QUERY_PATH, Config
 from .models import (
     get_scheduled_rooms,
     get_usage_statistics,
+    record_recharge_bill,
     get_room_subscription,
     set_room_subscription,
+    get_recharge_bill_room,
     stop_room_subscription,
     get_electricity_snapshot,
     record_electricity_query,
@@ -27,6 +30,7 @@ from .models import (
     get_electricity_payment_amounts,
     recalculate_electricity_history,
     save_electricity_daily_snapshot,
+    remove_confirmed_manual_payments,
     save_electricity_payment_records,
     unbind_account_from_subscription,
     record_manual_electricity_payment,
@@ -184,7 +188,12 @@ async def sync_bound_payment_records(room_id: int) -> bool:
 
 
 async def _sync_bound_payment_records(room_id: int) -> str | None:
-    """Cache payment records and return a privacy-safe failure reason."""
+    """Cache payment records and return a privacy-safe failure reason.
+
+    Each bill is routed to the room recorded in ``recharge_bills`` when the
+    plugin placed it; other bills stay on the bound room under the one-card
+    one-room assumption.
+    """
     accounts = await asyncio.to_thread(load_bound_accounts, room_id)
     if not accounts:
         return "未找到可用于校正的绑定账户"
@@ -203,7 +212,7 @@ async def _sync_bound_payment_records(room_id: int) -> str | None:
             logger.warning(f"宿舍 {room_id} 的绑定校园卡流水查询失败")
             return str(result.get("retmsg", "账单查询失败"))
         await asyncio.to_thread(
-            save_electricity_payment_records, room_id, result["records"]
+            route_synced_payment_records, room_id, result["records"]
         )
         if result["latest_bill_at"] is not None:
             await asyncio.to_thread(
@@ -212,6 +221,21 @@ async def _sync_bound_payment_records(room_id: int) -> str | None:
                 datetime.fromisoformat(result["latest_bill_at"]),
             )
     return None
+
+
+def route_synced_payment_records(
+    default_room_id: int, records: Iterable[Mapping[str, object]]
+) -> None:
+    """Save each verified payment to the room that owns its bill."""
+    grouped: dict[int, list[dict[str, object]]] = {}
+    for record in records:
+        billno = str(record.get("billno", ""))
+        owning_room = get_recharge_bill_room(billno) if billno else None
+        target_room = owning_room if owning_room is not None else default_room_id
+        grouped.setdefault(target_room, []).append(dict(record))
+    for target_room, room_records in grouped.items():
+        save_electricity_payment_records(target_room, room_records)
+        remove_confirmed_manual_payments(target_room, room_records)
 
 
 async def query_total_payment_amount(room_id: int, target_date: date) -> float | None:
@@ -449,7 +473,50 @@ def parse_payment_args(
     return query_params, float(amount), None
 
 
+# 待确认缴费：user_id -> {query_params, amount, created_at}
+_pending_payments: dict[str, dict[str, object]] = {}
+PENDING_PAYMENT_TTL_SECONDS = 300
+
+
+def _set_pending_payment(user_id: str, query_params: dict[str, str], amount: float):
+    _pending_payments[user_id] = {
+        "query_params": query_params,
+        "amount": amount,
+        "created_at": datetime.now(SHANGHAI_TZ),
+    }
+
+
+def _get_pending_payment(user_id: str) -> dict[str, object] | None:
+    pending = _pending_payments.get(user_id)
+    if pending is None:
+        return None
+    created_at = pending["created_at"]
+    assert isinstance(created_at, datetime)
+    if datetime.now(SHANGHAI_TZ) - created_at > timedelta(
+        seconds=PENDING_PAYMENT_TTL_SECONDS
+    ):
+        _pending_payments.pop(user_id, None)
+        return None
+    return pending
+
+
+def _clear_pending_payment(user_id: str) -> None:
+    _pending_payments.pop(user_id, None)
+
+
 async def handle_payment_command(user_id: str, arguments: str) -> str:
+    action = arguments.strip()
+    if action == "确认":
+        pending = _get_pending_payment(user_id)
+        if pending is None:
+            return "没有待确认的缴费，请先发送 #电费 缴费 区域 楼栋 房间号 金额"
+        return await execute_payment(user_id, pending)
+    if action == "取消":
+        _clear_pending_payment(user_id)
+        return "已取消缴费。"
+    if action and not arguments.replace("确认", "").replace("取消", "").strip():
+        return "格式：#电费 缴费 区域 楼栋 房间号 金额\n确认请回复 #电费 缴费 确认"
+
     query_params, amount, error = parse_payment_args(arguments)
     if error:
         return error
@@ -464,6 +531,32 @@ async def handle_payment_command(user_id: str, arguments: str) -> str:
             "缴费将从该校园卡余额中直接扣除。"
         )
 
+    _set_pending_payment(user_id, query_params, amount)
+    return (
+        f"即将为 {describe_room(query_params)} 充值 {amount:.2f} 元，"
+        f"将从校园卡余额中扣除。\n"
+        f"回复 #电费 缴费 确认 完成支付，或 #电费 缴费 取消 放弃。"
+        f"（5 分钟内有效）"
+    )
+
+
+async def execute_payment(
+    user_id: str, pending: dict[str, object]
+) -> str:
+    query_params = pending["query_params"]
+    amount = pending["amount"]
+    assert isinstance(query_params, dict)
+    assert isinstance(amount, float)
+
+    account = await asyncio.to_thread(load_account, user_id)
+    if not account:
+        _clear_pending_payment(user_id)
+        return (
+            "尚未设置校园卡账号。\n"
+            "请先私聊发送 #设置校园卡账号 学号 密码，"
+            "缴费将从该校园卡余额中直接扣除。"
+        )
+
     client = await login(account["username"], account["password"])
     if client is None:
         return "校园卡登录失败，请检查账号密码或稍后重试。"
@@ -472,12 +565,35 @@ async def handle_payment_command(user_id: str, arguments: str) -> str:
     finally:
         await client.aclose()
 
-    if result.get("retcode") == 0:
-        return (
-            f"缴费成功：{describe_room(query_params)} 充值 {amount:.2f} 元\n"
-            f"已从校园卡余额扣除。"
-        )
-    return f"缴费失败：{result.get('retmsg', '未知错误')}"
+    if result.get("retcode") != 0:
+        return f"缴费失败：{result.get('retmsg', '未知错误')}"
+
+    _clear_pending_payment(user_id)
+    await record_local_recharge_payment(
+        query_params, amount, str(result.get("billno", ""))
+    )
+    return (
+        f"缴费成功：{describe_room(query_params)} 充值 {amount:.2f} 元\n"
+        f"已从校园卡余额扣除。"
+    )
+
+
+async def record_local_recharge_payment(
+    query_params: dict[str, str], amount: float, billno: str
+) -> None:
+    """Write a recharge into the manual payment table for settlement.
+
+    The server bill sync later confirms the charge and removes this manual
+    copy, so bound rooms never double-count the same payment. The bill is
+    also tied to this room so later syncs route the payment to it.
+    """
+    now = datetime.now(SHANGHAI_TZ)
+    room_id = await asyncio.to_thread(
+        record_manual_electricity_payment, query_params, now, amount
+    )
+    if billno:
+        await asyncio.to_thread(record_recharge_bill, billno, room_id)
+    await recalculate_cached_history(room_id)
 
 
 def parse_admin_entry(
@@ -738,7 +854,7 @@ async def handle_electric_help(
         "电费查询帮助\n\n"
         "#电费 - 查询记录宿舍当前余额\n"
         "#电费 区域 楼栋 房间号 - 即时查询余额\n"
-        "#电费 缴费 区域 楼栋 房间号 金额 - 从校园卡余额充值电费\n\n"
+        "#电费 缴费 区域 楼栋 房间号 金额 - 发起充值，回复确认后从校园卡余额扣款\n\n"
         f"{record_help()}\n\n"
         "定时日结在每日 00:00 执行；绑定账户后可用缴费流水校正历史及后续记录。\n"
         "校正前提：该校园卡只给这一间宿舍缴费，且该宿舍只由这张卡缴费。\n"

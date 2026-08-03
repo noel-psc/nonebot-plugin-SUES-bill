@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -702,3 +702,92 @@ async def test_statistics_reports_missing_boundary_snapshots(monkeypatch):
 
     assert "账单同步成功" in message
     assert "缺少连续日界余额快照" in message
+
+
+def test_recharge_bill_is_remembered_and_looked_up(monkeypatch, tmp_path):
+    from nonebot_plugin_sues_bill import models
+
+    monkeypatch.setattr(models, "DATA_DIR", tmp_path / "nonebot_plugin_sues_bill")
+    monkeypatch.setattr(models, "LEGACY_DATA_DIR", tmp_path / "data")
+    models.set_room_subscription("1", QUERY_PARAMS)
+    subscription = models.get_room_subscription("1")
+    assert subscription is not None
+    room_id = subscription["room_id"]
+
+    assert models.get_recharge_bill_room("bill-xyz") is None
+    models.record_recharge_bill("bill-xyz", room_id)
+    assert models.get_recharge_bill_room("bill-xyz") == room_id
+
+
+def test_synced_payments_route_to_owning_room(monkeypatch, tmp_path):
+    from nonebot_plugin_sues_bill import models, electric
+
+    monkeypatch.setattr(models, "DATA_DIR", tmp_path / "nonebot_plugin_sues_bill")
+    monkeypatch.setattr(models, "LEGACY_DATA_DIR", tmp_path / "data")
+    models.set_room_subscription("1", QUERY_PARAMS)
+    bound_subscription = models.get_room_subscription("1")
+    assert bound_subscription is not None
+    bound_room = bound_subscription["room_id"]
+    other_params = {**QUERY_PARAMS, "roomid": "2002"}
+    models.set_room_subscription("2", other_params)
+    other_subscription = models.get_room_subscription("2")
+    assert other_subscription is not None
+    other_room = other_subscription["room_id"]
+    models.record_recharge_bill("bill-for-other", other_room)
+
+    records = [
+        {
+            "source_key": "a" * 64,
+            "billno": "bill-for-other",
+            "paid_at": "2026-08-04T10:00:00+08:00",
+            "amount_yuan": 50.0,
+        },
+        {
+            "source_key": "b" * 64,
+            "billno": "unknown-bill",
+            "paid_at": "2026-08-04T11:00:00+08:00",
+            "amount_yuan": 30.0,
+        },
+    ]
+    electric.route_synced_payment_records(bound_room, records)
+
+    assert models.get_electricity_payment_amount(other_room, date(2026, 8, 4)) == 50.0
+    assert models.get_electricity_payment_amount(bound_room, date(2026, 8, 4)) == 30.0
+
+
+def test_synced_payments_remove_manual_copy_from_owning_room(
+    monkeypatch, tmp_path
+):
+    from datetime import datetime
+
+    from nonebot_plugin_sues_bill import models, electric
+
+    monkeypatch.setattr(models, "DATA_DIR", tmp_path / "nonebot_plugin_sues_bill")
+    monkeypatch.setattr(models, "LEGACY_DATA_DIR", tmp_path / "data")
+    models.set_room_subscription("1", QUERY_PARAMS)
+    subscription = models.get_room_subscription("1")
+    assert subscription is not None
+    room_id = subscription["room_id"]
+    paid_at = datetime(2026, 8, 4, 10, 0, tzinfo=UTC)
+    models.record_manual_electricity_payment(QUERY_PARAMS, paid_at, 50.0)
+    assert (
+        models.get_manual_electricity_payment_amount(room_id, date(2026, 8, 4))
+        == 50.0
+    )
+
+    electric.route_synced_payment_records(
+        room_id,
+        [
+            {
+                "source_key": "c" * 64,
+                "billno": "confirmed-bill",
+                "paid_at": paid_at.isoformat(),
+                "amount_yuan": 50.0,
+            }
+        ],
+    )
+
+    assert (
+        models.get_manual_electricity_payment_amount(room_id, date(2026, 8, 4))
+        is None
+    )
