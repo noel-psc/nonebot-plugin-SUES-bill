@@ -35,7 +35,9 @@ from .models import (
 )
 from .campus_card import (
     login,
+    load_account,
     load_bound_accounts,
+    recharge_electricity,
     query_electric_payment_records,
 )
 
@@ -423,6 +425,61 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
     return record_help()
 
 
+def parse_payment_args(
+    arguments: str,
+) -> tuple[dict[str, str] | None, float | None, str | None]:
+    parts = arguments.split()
+    if len(parts) != 4:
+        return (
+            None,
+            None,
+            "格式：#电费 缴费 区域 楼栋 房间号 金额\n例：#电费 缴费 三期 21 1001 50",
+        )
+    query_params, error = parse_room_params(" ".join(parts[:3]))
+    if error:
+        return None, None, error.replace("#电费", "#电费 缴费")
+    amount_text = parts[3]
+    if not amount_text.isdigit():
+        return None, None, f"金额格式错误：{amount_text}"
+    amount = int(amount_text)
+    if amount <= 0:
+        return None, None, "缴费金额必须大于 0。"
+    if amount > 999:
+        return None, None, "单次缴费金额不能超过 999 元。"
+    return query_params, float(amount), None
+
+
+async def handle_payment_command(user_id: str, arguments: str) -> str:
+    query_params, amount, error = parse_payment_args(arguments)
+    if error:
+        return error
+    assert query_params is not None
+    assert amount is not None
+
+    account = await asyncio.to_thread(load_account, user_id)
+    if not account:
+        return (
+            "尚未设置校园卡账号。\n"
+            "请先私聊发送 #设置校园卡账号 学号 密码，"
+            "缴费将从该校园卡余额中直接扣除。"
+        )
+
+    client = await login(account["username"], account["password"])
+    if client is None:
+        return "校园卡登录失败，请检查账号密码或稍后重试。"
+    try:
+        result = await recharge_electricity(client, query_params, amount)
+    finally:
+        await client.aclose()
+
+    if result.get("retcode") == 0:
+        return (
+            f"缴费成功：{describe_room(query_params)} 充值 {amount:.2f} 元\n"
+            f"已从校园卡余额扣除。"
+        )
+    return f"缴费失败：{result.get('retmsg', '未知错误')}"
+
+
 def parse_admin_entry(
     arguments: str,
 ) -> tuple[str, dict[str, str], datetime, float] | str:
@@ -626,6 +683,9 @@ async def handle_electric_query(
     elif arg_text == "记录" or arg_text.startswith("记录 "):
         arguments = arg_text.removeprefix("记录").strip()
         await electric_query.finish(await handle_record_command(user_id, arguments))
+    elif arg_text == "缴费" or arg_text.startswith("缴费 "):
+        arguments = arg_text.removeprefix("缴费").strip()
+        await electric_query.finish(await handle_payment_command(user_id, arguments))
     elif (days := parse_statistics_days(arg_text)) is not None:
         if not 0 <= days <= MAX_STATISTICS_DAYS:
             await electric_query.finish(f"统计天数应为 0 或 1 到 {MAX_STATISTICS_DAYS}")
@@ -677,7 +737,8 @@ async def handle_electric_help(
     await electric_help.finish(
         "电费查询帮助\n\n"
         "#电费 - 查询记录宿舍当前余额\n"
-        "#电费 区域 楼栋 房间号 - 即时查询余额\n\n"
+        "#电费 区域 楼栋 房间号 - 即时查询余额\n"
+        "#电费 缴费 区域 楼栋 房间号 金额 - 从校园卡余额充值电费\n\n"
         f"{record_help()}\n\n"
         "定时日结在每日 00:00 执行；绑定账户后可用缴费流水校正历史及后续记录。\n"
         "校正前提：该校园卡只给这一间宿舍缴费，且该宿舍只由这张卡缴费。\n"

@@ -29,6 +29,139 @@ async def test_payment_query_reports_expired_bill_session(monkeypatch):
     assert result == {"retcode": -1, "retmsg": "账单登录状态已过期"}
 
 
+def _recharge_paybill_page(billno: str, refno: str, csrf: str) -> str:
+    return (
+        '<html><head><meta name="_csrf" content="%s"/>'
+        '<meta name="_csrf_header" content="X-CSRF-TOKEN"/></head>'
+        f'<body><input type="hidden" id="billno" value="{billno}">'
+        f'<input type="hidden" id="refno" value="{refno}"></body></html>'
+    ) % csrf
+
+
+@pytest.mark.asyncio
+async def test_recharge_electricity_pays_from_balance(monkeypatch):
+    from nonebot_plugin_sues_bill import campus_card
+
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/eleresult"):
+            return httpx.Response(
+                200, text='<input id="roomdef" left-degree="16.0">'
+            )
+        if request.url.path.endswith("/elepaybill"):
+            assert request.url.params["amount"] == "50"
+            return httpx.Response(
+                200,
+                text=_recharge_paybill_page(
+                    "bill-123", "ref-456", "csrf-token-789"
+                ),
+            )
+        if request.url.path.endswith("/payconfirm.json"):
+            assert request.headers.get("X-CSRF-TOKEN") == "csrf-token-789"
+            assert request.content == b"billno=bill-123&refno=ref-456"
+            return httpx.Response(200, json={"retcode": "0", "retmsg": "ok"})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    monkeypatch.setattr(campus_card.config, "sues_base_url", "https://example.test")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await campus_card.recharge_electricity(
+            client, QUERY_PARAMS, 50.0
+        )
+
+    assert result == {
+        "retcode": 0,
+        "billno": "bill-123",
+        "refno": "ref-456",
+        "amount_yuan": 50.0,
+    }
+    assert [r.url.path for r in calls] == [
+        "/epay/h5/eleresult",
+        "/epay/h5/elepaybill",
+        "/epay/h5/payconfirm.json",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recharge_electricity_reports_insufficient_balance(monkeypatch):
+    from nonebot_plugin_sues_bill import campus_card
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/eleresult"):
+            return httpx.Response(200, text='<input id="roomdef" left-degree="1.0">')
+        if request.url.path.endswith("/elepaybill"):
+            return httpx.Response(
+                200,
+                text=_recharge_paybill_page("bill-1", "ref-2", "csrf-3"),
+            )
+        if request.url.path.endswith("/payconfirm.json"):
+            return httpx.Response(
+                200, json={"retcode": "-1", "retmsg": "账户余额不足"}
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    monkeypatch.setattr(campus_card.config, "sues_base_url", "https://example.test")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await campus_card.recharge_electricity(
+            client, QUERY_PARAMS, 50.0
+        )
+
+    assert result == {"retcode": -1, "retmsg": "账户余额不足"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<html>登录失效</html>",
+        "<html>登陆失败，当前登录失效</html>",
+        "<html>程序发生了错误，或无权限访问</html>",
+        "<html>登录已过期</html>",
+    ],
+)
+async def test_recharge_electricity_handles_expired_session(monkeypatch, body):
+    from nonebot_plugin_sues_bill import campus_card
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/eleresult"):
+            return httpx.Response(200, text='<input id="roomdef" left-degree="1.0">')
+        return httpx.Response(200, text=body)
+
+    monkeypatch.setattr(campus_card.config, "sues_base_url", "https://example.test")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await campus_card.recharge_electricity(
+            client, QUERY_PARAMS, 50.0
+        )
+
+    assert result == {"retcode": -1, "retmsg": "登录状态已过期，请重新设置校园卡账号"}
+
+
+def test_parse_payment_args_rejects_invalid_amount():
+    from nonebot_plugin_sues_bill import electric
+
+    _, _, error = electric.parse_payment_args("三期 21 1001 abc")
+    assert error is not None
+    assert "金额格式错误" in error
+
+    _, _, error = electric.parse_payment_args("三期 21 1001 0")
+    assert error is not None
+    assert "必须大于 0" in error
+
+    _, _, error = electric.parse_payment_args("三期 21 1001 1000")
+    assert error is not None
+    assert "不能超过 999 元" in error
+
+
+def test_parse_payment_args_accepts_room_and_amount():
+    from nonebot_plugin_sues_bill import electric
+
+    query_params, amount, error = electric.parse_payment_args("三期 21 1001 50")
+    assert error is None
+    assert query_params == QUERY_PARAMS
+    assert amount == 50.0
+
+
 @pytest.fixture
 def room_id(monkeypatch, tmp_path):
     from nonebot_plugin_sues_bill import models

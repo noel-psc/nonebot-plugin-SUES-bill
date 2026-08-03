@@ -22,7 +22,10 @@ from .config import (
     BILL_LOAD_PATH,
     BILL_PAGE_PATH,
     REQUEST_TIMEOUT,
+    ELECTRIC_PAYBILL_PATH,
     CAMPUS_CARD_INDEX_PATH,
+    ELECTRIC_RECHARGE_PATH,
+    ELECTRIC_PAY_CONFIRM_PATH,
     Config,
 )
 from .models import (
@@ -380,6 +383,102 @@ async def query_electric_payment_amount(
         return result
     amounts: dict[date, float] = result["amounts"]
     return {"retcode": 0, "amount": amounts.get(target_date, 0.0)}
+
+
+# ─── 电费充值 ─────────────────────────────────────────────
+
+
+def _extract_hidden_input(page_text: str, field_id: str) -> str | None:
+    match = re.search(
+        rf'<input\s+type="hidden"\s+id="{re.escape(field_id)}"\s+value="([^"]+)"',
+        page_text,
+    )
+    return match.group(1) if match else None
+
+
+def _extract_csrf(page_text: str) -> str | None:
+    match = re.search(r'<meta name="_csrf" content="([^"]+)"', page_text)
+    return match.group(1) if match else None
+
+
+def _extract_csrf_header(page_text: str) -> str:
+    match = re.search(r'<meta name="_csrf_header" content="([^"]+)"', page_text)
+    return match.group(1) if match else "X-CSRF-TOKEN"
+
+
+async def recharge_electricity(
+    client: httpx.AsyncClient,
+    query_params: dict[str, str],
+    amount_yuan: float,
+) -> dict:
+    """从校园卡余额直接为指定宿舍充值电费，无需额外密码。
+
+    流程：查询当前剩余电量 → 生成缴费订单 → 确认支付（账户余额扣款）。
+    """
+    params = {
+        key: str(query_params[key]) for key in ("sysid", "roomid", "areaid", "buildid")
+    }
+    try:
+        ele_result = await client.get(
+            config.sues_base_url + ELECTRIC_RECHARGE_PATH, params=params
+        )
+        ele_result.raise_for_status()
+        rest_match = re.search(r'left-degree="([\d.]+)"', ele_result.text)
+        rest = rest_match.group(1) if rest_match else ""
+
+        pay_params = {**params, "amount": f"{amount_yuan:g}", "rest": rest}
+        paybill_page = await client.get(
+            config.sues_base_url + ELECTRIC_PAYBILL_PATH, params=pay_params
+        )
+        paybill_page.raise_for_status()
+        billno = _extract_hidden_input(paybill_page.text, "billno")
+        refno = _extract_hidden_input(paybill_page.text, "refno")
+        csrf_token = _extract_csrf(paybill_page.text)
+        if not billno or not refno or not csrf_token:
+            reason = (
+                "登录状态已过期，请重新设置校园卡账号"
+                if any(
+                    keyword in paybill_page.text
+                    for keyword in ("登录失效", "登陆失败", "无权限访问", "登录已过期")
+                )
+                else "缴费订单生成失败"
+            )
+            logger.error(f"缴费订单页解析失败: {reason}")
+            return {"retcode": -1, "retmsg": reason}
+
+        csrf_header = _extract_csrf_header(paybill_page.text)
+        headers = {csrf_header: csrf_token}
+        confirm = await client.post(
+            config.sues_base_url + ELECTRIC_PAY_CONFIRM_PATH,
+            data={"billno": billno, "refno": refno},
+            headers=headers,
+        )
+        confirm.raise_for_status()
+        try:
+            payload = json.loads(confirm.text)
+        except json.JSONDecodeError:
+            logger.error("缴费确认返回非 JSON 响应")
+            return {"retcode": -1, "retmsg": "缴费确认响应异常"}
+        if payload.get("retcode") != "0":
+            return {
+                "retcode": -1,
+                "retmsg": str(payload.get("retmsg", "缴费失败")),
+            }
+        return {
+            "retcode": 0,
+            "billno": billno,
+            "refno": refno,
+            "amount_yuan": amount_yuan,
+        }
+    except httpx.TimeoutException:
+        logger.error("电费缴费超时")
+        return {"retcode": -1, "retmsg": "缴费超时"}
+    except httpx.HTTPError as e:
+        logger.error(f"电费缴费请求失败: {e}")
+        return {"retcode": -1, "retmsg": "缴费请求失败"}
+    except Exception as e:
+        logger.error(f"电费缴费异常: {e}")
+        return {"retcode": -1, "retmsg": f"缴费异常: {e}"}
 
 
 # ─── 处理器 ───────────────────────────────────────────────
