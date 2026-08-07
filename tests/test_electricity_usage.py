@@ -523,7 +523,7 @@ def test_manual_entries_are_stored_in_shanghai_time_and_recalculate_usage(room_i
 def test_room_description_masks_the_room_number():
     from nonebot_plugin_sues_bill.electric import describe_room
 
-    assert describe_room(QUERY_PARAMS) == "三期2*栋1**1"
+    assert describe_room(QUERY_PARAMS) == "三期2×栋1××1"
 
 
 @pytest.mark.asyncio
@@ -619,7 +619,7 @@ async def test_statistics_refreshes_history_for_existing_bound_account(monkeypat
     message = await electric.show_statistics("1", 30)
 
     assert refreshed_room_ids == [1]
-    assert "准确 2 天，估算 0 天" in message
+    assert "准确 2 天 · 估算 0 天" in message
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,13 @@ from nonebot.adapters import Bot, Event, Message
 from Crypto.Util.Padding import pad
 from cryptography.fernet import Fernet
 
-from .compat import build_reply, is_private_event
+from .compat import (
+    build_reply,
+    command_input,
+    build_keyboard,
+    command_prefix,
+    is_private_event,
+)
 from .config import (
     USER_AGENT,
     BILL_LOAD_PATH,
@@ -529,10 +535,10 @@ async def handle_campus_card_query(
             await campus_card_query.finish(
                 build_reply(
                     bot,
-                    f"**💳 校园卡余额**\n"
+                    f"# 💳 校园卡余额\n"
                     f"***\n"
-                    f"- 账户余额：￥{result['balance']}\n"
-                    f"- 冻结余额：￥{result['frozen']}",
+                    f"- 账户余额：**￥{result['balance']}**\n"
+                    f"- 冻结余额：**￥{result['frozen']}**",
                 )
             )
         else:
@@ -581,20 +587,34 @@ async def handle_campus_card_set(bot: Bot, event: Event, args: Message = Command
 @campus_card_help.handle()
 async def handle_campus_card_help(bot: Bot, event: Event, args: Message = CommandArg()):
     """校园卡帮助"""
+    prefix = command_prefix()
+    keyboard = build_keyboard(
+        [
+            [
+                ("balance", "💳 查询余额", f"{prefix}校园卡"),
+                ("set", "🔑 设置账号", f"{prefix}设置校园卡账号 学号 密码"),
+            ],
+            [
+                ("migrate", "🚚 迁移旧数据", f"{prefix}迁移旧数据"),
+                ("help", "❓ 电费帮助", f"{prefix}电费帮助"),
+            ],
+        ]
+    )
     await campus_card_help.finish(
         build_reply(
             bot,
-            "**💳 校园卡查询帮助**\n"
+            "✨ **💳 校园卡查询帮助**\n"
             "***\n"
-            "**使用方式**\n"
-            "- **#校园卡** — 查询余额\n"
-            "- **#校园卡帮助** — 查看帮助\n\n"
-            "**首次使用**\n"
-            "1. 私聊发送：**#设置校园卡账号 学号 密码**\n"
-            "2. 如需校正电费缴费，设置记录宿舍后再发送：**#电费 记录 绑定**\n\n"
+            "> 💡 小提示：下方命令可直接点击触发\n\n"
+            f"{command_input('校园卡', '💳 查询余额')} | "
+            f"{command_input('设置校园卡账号 学号 密码', '🔑 设置账号')}\n\n"
+            f"{command_input('迁移旧数据 你的旧QQ号', '🚚 迁移旧数据')} | "
+            f"{command_input('电费 记录 绑定', '🔗 绑定校正')}\n\n"
             "**换协议迁移**\n"
-            "从旧协议更换为 QQ 官方机器人后，发送 **#迁移旧数据 你的旧QQ号** "
+            "从旧协议更换为 QQ 官方机器人后，发送 "
+            f"{command_input('迁移旧数据 你的旧QQ号', '迁移旧数据')} "
             "迁移原账号与记录宿舍。",
+            keyboard,
         )
     )
 

@@ -9,7 +9,13 @@ from nonebot import logger, require, get_driver, on_command, get_plugin_config
 from nonebot.params import CommandArg
 from nonebot.adapters import Bot, Event, Message
 
-from .compat import build_reply
+from .compat import (
+    build_reply,
+    quote_block,
+    command_input,
+    build_keyboard,
+    command_prefix,
+)
 from .config import USER_AGENT, REQUEST_TIMEOUT, ELECTRIC_QUERY_PATH, Config
 from .models import (
     get_scheduled_rooms,
@@ -131,10 +137,10 @@ def describe_room(query_params: dict[str, str]) -> str:
         ),
         "?",
     )
-    masked_building = f"{build_num[:-1]}*" if build_num != "?" else "*"
+    masked_building = f"{build_num[:-1]}×" if build_num != "?" else "×"
     room_id = query_params["roomid"]
     masked_room = (
-        f"{room_id[0]}{'*' * (len(room_id) - 2)}{room_id[-1]}"
+        f"{room_id[0]}{'×' * (len(room_id) - 2)}{room_id[-1]}"
         if len(room_id) > 2
         else room_id
     )
@@ -333,12 +339,14 @@ async def settle_daily_electricity() -> None:
 def record_help() -> str:
     return (
         "**电费记录命令**\n\n"
-        "- **#电费 记录 区域 楼栋 房间号**\n"
-        "- **#电费 统计 0**（今日截至当前估算）\n"
-        "- **#电费 统计 [天数]**（已结束自然日）\n"
-        "- **#电费 记录 状态** / **#电费 记录 停止**\n"
-        "- **#电费 记录 绑定** / **#电费 记录 解绑**\n"
-        "- **#电费 管理** — 管理员手动录入"
+        f"- {command_input('电费 记录 三期 21 1001', '设置记录宿舍')}\n"
+        f"- {command_input('电费 统计 0', '今日截至当前估算')}\n"
+        f"- {command_input('电费 统计 7', '已结束自然日统计')}\n"
+        f"- {command_input('电费 记录 状态', '查看记录状态')} / "
+        f"{command_input('电费 记录 停止', '停止记录')}\n"
+        f"- {command_input('电费 记录 绑定', '绑定账号校正')} / "
+        f"{command_input('电费 记录 解绑', '解绑账号')}\n"
+        f"- {command_input('电费 管理', '管理员录入')} — 管理员手动录入"
     )
 
 
@@ -516,8 +524,7 @@ async def handle_payment_command(user_id: str, arguments: str) -> str:
         return "已取消缴费。"
     if action and not arguments.replace("确认", "").replace("取消", "").strip():
         return (
-            "格式：**#电费 缴费 区域 楼栋 房间号 金额**\n"
-            "确认请回复 **#电费 缴费 确认**"
+            "格式：**#电费 缴费 区域 楼栋 房间号 金额**\n确认请回复 **#电费 缴费 确认**"
         )
 
     query_params, amount, error = parse_payment_args(arguments)
@@ -624,10 +631,12 @@ def parse_admin_entry(
 
 
 def admin_help() -> str:
+    reading_cmd = "电费 管理 读数 区域 楼栋 房间号 日期 [时间] 剩余电量"
+    payment_cmd = "电费 管理 缴费 区域 楼栋 房间号 日期 [时间] 金额"
     return (
         "**管理员电费录入命令**\n\n"
-        "- **#电费 管理 读数 区域 楼栋 房间号 日期 [时间] 剩余电量**\n"
-        "- **#电费 管理 缴费 区域 楼栋 房间号 日期 [时间] 金额**\n"
+        f"- {command_input(reading_cmd, '录入读数')}\n"
+        f"- {command_input(payment_cmd, '录入缴费')}\n"
         "日期格式：**YYYY-MM-DD**；时间可省略，默认为 **00:00**。"
     )
 
@@ -722,20 +731,23 @@ async def show_statistics(user_id: str, days: int) -> str:
         )
         if estimate["status"] == "insufficient_readings":
             return (
-                f"{describe_room(subscription)}今日截至当前暂无可估算的耗电记录。\n"
+                f"# {describe_room(subscription)}今日暂无可估算耗电\n"
                 f"今日已记录 {estimate['reading_count']} 次，至少需要两次成功查询。\n"
-                f"{correction_tip}"
+                f"{quote_block(correction_tip)}"
             )
         if estimate["status"] == "recharge_unverified":
             return (
-                f"{describe_room(subscription)}今日截至当前无法估算耗电。\n"
-                f"检测到余额增加，今日可能已缴费。\n{correction_tip}"
+                f"# {describe_room(subscription)}今日无法估算耗电\n"
+                f"检测到余额增加，今日可能已缴费。\n"
+                f"{quote_block(correction_tip)}"
             )
         return (
-            f"**{describe_room(subscription)}今日截至当前耗电（估算）**\n"
-            f"- 耗电：{estimate['consumed_kwh']} 度\n"
-            f"- 电费：{estimate['cost_yuan']:.2f} 元\n"
-            f"按今日首次和最新查询余额计算；缴费后可能不准确。\n{correction_tip}"
+            f"# {describe_room(subscription)}今日截至当前耗电（估算）\n"
+            f"***\n"
+            f"- 耗电：**{estimate['consumed_kwh']} 度**\n"
+            f"- 电费：**{estimate['cost_yuan']:.2f} 元**\n"
+            f"按今日首次和最新查询余额计算；缴费后可能不准确。\n"
+            f"{quote_block(correction_tip)}"
         )
     recalculated_days: int | None = None
     history_sync_error: str | None = None
@@ -759,24 +771,25 @@ async def show_statistics(user_id: str, days: int) -> str:
     )
     if statistics["valid_days"] == 0:
         return (
-            f"已记录 {statistics['recorded_days']} 天，但暂无可统计的耗电记录。\n"
-            f"{correction_tip}"
+            f"# {describe_room(subscription)}暂无可统计的耗电\n"
+            f"已记录 {statistics['recorded_days']} 天，但尚无完整日界数据。\n"
+            f"{quote_block(correction_tip)}"
         )
     average = statistics["total_kwh"] / statistics["valid_days"]
     status_summary = (
-        f"准确 {statistics['complete_days']} 天，"
-        f"估算 {statistics['estimated_days']} 天，"
+        f"准确 {statistics['complete_days']} 天 · "
+        f"估算 {statistics['estimated_days']} 天 · "
         f"未计入 {statistics['unavailable_days']} 天"
     )
     return (
-        f"**{describe_room(subscription)}已记录"
-        f" {statistics['recorded_days']} 天耗电统计**\n"
-        f"- 总耗电：{statistics['total_kwh']} 度\n"
-        f"- 总电费：{statistics['total_cost_yuan']:.2f} 元\n"
-        f"- 日均耗电：{average:.2f} 度（{statistics['valid_days']}天）\n"
-        f"- 最高耗电：{statistics['max_date']}，{statistics['max_kwh']} 度\n"
-        f"{status_summary}\n"
-        f"{correction_tip}"
+        f"# {describe_room(subscription)} · {statistics['recorded_days']} 天耗电统计\n"
+        f"***\n"
+        f"- 总耗电：**{statistics['total_kwh']} 度**\n"
+        f"- 总电费：**{statistics['total_cost_yuan']:.2f} 元**\n"
+        f"- 日均耗电：**{average:.2f} 度**（{statistics['valid_days']}天）\n"
+        f"- 最高耗电：**{statistics['max_kwh']} 度**（{statistics['max_date']}）\n\n"
+        f"{status_summary}\n\n"
+        f"{quote_block(correction_tip)}"
     )
 
 
@@ -873,19 +886,41 @@ async def handle_electric_raw(
 async def handle_electric_help(
     bot: Bot, event: Event, args: Message = CommandArg()
 ) -> None:
+    prefix = command_prefix()
+    keyboard = build_keyboard(
+        [
+            [
+                ("query", "⚡ 查询电费", f"{prefix}电费"),
+                ("stats", "📊 近7天统计", f"{prefix}电费 统计 7"),
+            ],
+            [
+                ("record", "📝 记录宿舍", f"{prefix}电费 记录 三期 21 1001"),
+                ("recharge", "💰 电费充值", f"{prefix}电费 缴费"),
+            ],
+            [
+                ("campus", "💳 校园卡", f"{prefix}校园卡"),
+                ("help", "❓ 帮助", f"{prefix}电费帮助"),
+            ],
+        ]
+    )
     await electric_help.finish(
         build_reply(
             bot,
-            "**电费查询帮助**\n\n"
-            "- **#电费** — 查询记录宿舍当前余额\n"
-            "- **#电费 区域 楼栋 房间号** — 即时查询余额\n"
-            "- **#电费 缴费 区域 楼栋 房间号 金额** — 发起充值，"
-            "回复确认后从校园卡余额扣款\n\n"
+            "✨ **电费查询帮助**\n"
+            "***\n"
+            "> 💡 小提示：下方命令可直接点击触发\n\n"
+            f"{command_input('电费', '⚡ 查询电费')} | "
+            f"{command_input('电费 统计 7', '📊 近7天统计')}\n\n"
+            f"{command_input('电费 记录 三期 21 1001', '📝 设置记录宿舍')} | "
+            f"{command_input('电费 统计 0', '⏱️ 今日估算')}\n\n"
+            f"{command_input('校园卡', '💳 校园卡余额')} | "
+            f"{command_input('电费 缴费', '💰 电费充值')}\n\n"
             f"{record_help()}\n\n"
             "定时日结在每日 **00:00** 执行；绑定账户后可用缴费流水校正历史"
             "及后续记录。\n"
             "校正前提：该校园卡只给这一间宿舍缴费，且该宿舍只由这张卡缴费。\n"
             "三期：10-26栋；四期：20、21、23、24、27-30、33-36、39-42栋",
+            keyboard,
         )
     )
 
@@ -897,7 +932,10 @@ async def handle_electric_help_detail(
     await electric_help_detail.finish(
         build_reply(
             bot,
-            "**电费原始查询帮助**\n\n"
+            "✨ **电费原始查询帮助**\n"
+            "***\n"
+            "> 💡 小提示：下方命令可直接点击触发\n\n"
+            f"{command_input('电费原始 4 1001 101 13', '🔍 原始参数查询')}\n\n"
             "格式：**#电费原始 系统ID 房间号 区域ID 楼栋ID**\n"
             "例：**#电费原始 4 1001 101 13**\n\n"
             "系统ID：4 = 上海工程技术大学电控充值\n"

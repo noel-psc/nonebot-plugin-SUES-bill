@@ -143,13 +143,13 @@ def test_rewrite_command_prefix_keeps_hash_prefix():
 
 
 def test_build_reply_uses_markdown_for_qq_bot():
-    from nonebot.adapters.qq import MessageSegment as QQMessageSegment
+    from nonebot.adapters.qq import Message as QQMessage
 
     from nonebot_plugin_sues_bill.compat import build_reply
 
     reply = build_reply(cast(Bot, _QQBot()), "**标题**\n- 项目")
-    assert isinstance(reply, QQMessageSegment)
-    assert reply.data["markdown"].content == "**标题**\n- 项目"
+    assert isinstance(reply, QQMessage)
+    assert reply[0].data["markdown"].content == "**标题**\n- 项目"
 
 
 def test_build_reply_lowers_to_plain_text_for_other_bots():
@@ -157,3 +157,33 @@ def test_build_reply_lowers_to_plain_text_for_other_bots():
 
     reply = build_reply(cast(Bot, _OneBotBot()), "**标题**\n- 项目")
     assert reply == "标题\n项目"
+
+
+def test_command_input_generates_clickable_tag_and_strips_to_command():
+    from nonebot_plugin_sues_bill.compat import command_input, strip_markdown
+
+    tag = command_input("电费 统计 7", "📊 近7天统计")
+    expected = (
+        '<qqbot-cmd-input text="#电费 统计 7" show="📊 近7天统计" reference="false" />'
+    )
+    assert tag == expected
+    assert strip_markdown(tag) == "#电费 统计 7"
+
+
+def test_build_keyboard_builds_command_buttons():
+    from nonebot_plugin_sues_bill.compat import build_keyboard
+
+    keyboard = build_keyboard([[("a", "查询", "#电费"), ("b", "统计", "#电费 统计 7")]])
+    assert keyboard.content is not None
+    rows = keyboard.content.rows
+    assert rows is not None
+    assert len(rows) == 1
+    first_row_buttons = rows[0].buttons
+    assert first_row_buttons is not None
+    button = first_row_buttons[0]
+    assert button.id == "a"
+    assert button.render_data is not None
+    assert button.render_data.label == "查询"
+    assert button.action is not None
+    assert button.action.type == 2
+    assert button.action.data == "#电费"
