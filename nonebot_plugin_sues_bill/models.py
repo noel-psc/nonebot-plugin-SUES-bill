@@ -492,6 +492,73 @@ def subscription_has_bound_account(user_id: str) -> bool:
     )
 
 
+def migrate_legacy_user(new_user_id: str, old_user_id: str) -> str:
+    """把旧协议下某 QQ 号名下的账号与订阅迁移到当前用户。
+
+    ``old_user_id`` 为旧协议（OneBot）记录的 QQ 号，``new_user_id`` 为
+    新协议下的 openid。返回稳定的结果代码：
+
+    - ``migrated`` 迁移成功
+    - ``invalid_old_id`` 旧 QQ 号格式不正确
+    - ``no_data`` 旧 QQ 号名下没有可迁移数据
+    - ``account_conflict`` 当前用户已设置校园卡账号
+    - ``subscription_conflict`` 当前用户已设置记录宿舍
+    """
+    initialize_database()
+    old = str(old_user_id)
+    if not old.isdigit():
+        return "invalid_old_id"
+    new = str(new_user_id)
+    with _connection() as connection:
+        if (
+            connection.execute(
+                "SELECT 1 FROM bot_users WHERE user_id = ?", (old,)
+            ).fetchone()
+            is None
+        ):
+            return "no_data"
+        has_account = (
+            connection.execute(
+                "SELECT 1 FROM campus_accounts WHERE user_id = ?", (old,)
+            ).fetchone()
+            is not None
+        )
+        has_subscription = (
+            connection.execute(
+                "SELECT 1 FROM room_subscriptions WHERE user_id = ?", (old,)
+            ).fetchone()
+            is not None
+        )
+        if not has_account and not has_subscription:
+            return "no_data"
+        if has_account and (
+            connection.execute(
+                "SELECT 1 FROM campus_accounts WHERE user_id = ?", (new,)
+            ).fetchone()
+            is not None
+        ):
+            return "account_conflict"
+        if has_subscription and (
+            connection.execute(
+                "SELECT 1 FROM room_subscriptions WHERE user_id = ?", (new,)
+            ).fetchone()
+            is not None
+        ):
+            return "subscription_conflict"
+        _ensure_user(connection, new)
+        if has_account:
+            connection.execute(
+                "UPDATE campus_accounts SET user_id = ? WHERE user_id = ?", (new, old)
+            )
+        if has_subscription:
+            connection.execute(
+                "UPDATE room_subscriptions SET user_id = ? WHERE user_id = ?",
+                (new, old),
+            )
+        connection.execute("DELETE FROM bot_users WHERE user_id = ?", (old,))
+    return "migrated"
+
+
 def get_scheduled_rooms() -> list[dict[str, Any]]:
     initialize_database()
     with _connection() as connection:

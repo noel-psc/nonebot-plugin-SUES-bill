@@ -16,7 +16,7 @@ from nonebot.adapters import Bot, Event, Message
 from Crypto.Util.Padding import pad
 from cryptography.fernet import Fernet
 
-from .compat import is_private_event
+from .compat import build_reply, is_private_event
 from .config import (
     USER_AGENT,
     BILL_LOAD_PATH,
@@ -30,6 +30,7 @@ from .config import (
 )
 from .models import (
     DATA_DIR,
+    migrate_legacy_user,
     load_campus_card_account,
     save_campus_card_account,
     get_bound_accounts_for_room,
@@ -487,6 +488,16 @@ async def recharge_electricity(
 campus_card_query = on_command("校园卡", priority=5, block=True)
 campus_card_set = on_command("设置校园卡账号", priority=5, block=True)
 campus_card_help = on_command("校园卡帮助", priority=5, block=True)
+campus_card_migrate = on_command("迁移旧数据", priority=5, block=True)
+
+_MIGRATE_MESSAGES = {
+    "invalid_old_id": "QQ 号格式不正确，应为纯数字。",
+    "no_data": "未找到该 QQ 号的旧记录，请确认填写的是旧协议下的 QQ 号。",
+    "account_conflict": "当前账号已设置过校园卡账号，无法迁移。",
+    "subscription_conflict": (
+        "当前账号已设置记录宿舍，请先发送 `#电费 记录 停止` 后再迁移。"
+    ),
+}
 
 
 @campus_card_query.handle()
@@ -498,27 +509,35 @@ async def handle_campus_card_query(
     account = load_account(user_id)
     if not account:
         await campus_card_query.finish(
-            "未设置账号，请先私聊发送：\n#设置校园卡账号 学号 密码"
+            build_reply(
+                bot,
+                "未设置账号，请先私聊发送：`#设置校园卡账号 学号 密码`",
+            )
         )
 
     # 登录并获取客户端
     client = await login(account["username"], account["password"])
     if not client:
-        await campus_card_query.finish("登录失败，请检查账号密码或验证码")
+        await campus_card_query.finish(
+            build_reply(bot, "登录失败，请检查账号密码或验证码")
+        )
 
     try:
         # 查询余额
         result = await query_balance(client)
         if result.get("retcode") == 0:
             await campus_card_query.finish(
-                f"💳 校园卡余额\n"
-                f"━━━━━━━━━━━━\n"
-                f"账户余额: ￥{result['balance']}\n"
-                f"冻结余额: ￥{result['frozen']}"
+                build_reply(
+                    bot,
+                    f"**💳 校园卡余额**\n"
+                    f"---\n"
+                    f"- 账户余额：￥{result['balance']}\n"
+                    f"- 冻结余额：￥{result['frozen']}",
+                )
             )
         else:
             await campus_card_query.finish(
-                f"查询失败: {result.get('retmsg', '未知错误')}"
+                build_reply(bot, f"查询失败：{result.get('retmsg', '未知错误')}")
             )
     finally:
         await client.aclose()
@@ -528,34 +547,80 @@ async def handle_campus_card_query(
 async def handle_campus_card_set(bot: Bot, event: Event, args: Message = CommandArg()):
     """设置校园卡账号（仅私聊）"""
     if not is_private_event(event):
-        await campus_card_set.finish("请私聊机器人设置账号")
+        await campus_card_set.finish(build_reply(bot, "请私聊机器人设置账号"))
 
     arg_text = args.extract_plain_text().strip()
     if not arg_text:
-        await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
+        await campus_card_set.finish(
+            build_reply(bot, "格式：#设置校园卡账号 学号 密码")
+        )
 
     # 支持密码包含空格
     parts = arg_text.split(maxsplit=1)
     if len(parts) < 2:
-        await campus_card_set.finish("格式：#设置校园卡账号 学号 密码")
+        await campus_card_set.finish(
+            build_reply(bot, "格式：#设置校园卡账号 学号 密码")
+        )
 
     user_id = event.get_user_id()
     if not save_account(user_id, parts[0], parts[1]):
-        await campus_card_set.finish("该校园卡账号已由其他用户设置，不能重复绑定")
+        await campus_card_set.finish(
+            build_reply(
+                bot,
+                "该校园卡账号已由其他用户设置。\n"
+                "如果这是你在旧协议下设置的账号，请发送 `#迁移旧数据 你的旧QQ号` "
+                "迁移后再重新设置。",
+            )
+        )
     has_bound_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
-    await campus_card_set.finish(account_saved_message(parts[0], has_bound_account))
+    await campus_card_set.finish(
+        build_reply(bot, account_saved_message(parts[0], has_bound_account))
+    )
 
 
 @campus_card_help.handle()
 async def handle_campus_card_help(bot: Bot, event: Event, args: Message = CommandArg()):
     """校园卡帮助"""
     await campus_card_help.finish(
-        "💳 校园卡查询帮助\n"
-        "━━━━━━━━━━━━\n\n"
-        "【使用方式】\n"
-        "#校园卡 — 查询余额\n"
-        "#校园卡帮助 — 查看帮助\n\n"
-        "【首次使用】\n"
-        "私聊发送：#设置校园卡账号 学号 密码\n"
-        "如需校正电费缴费，设置记录宿舍后再发送：#电费 记录 绑定"
+        build_reply(
+            bot,
+            "**💳 校园卡查询帮助**\n"
+            "---\n"
+            "**【使用方式】**\n"
+            "- `#校园卡` — 查询余额\n"
+            "- `#校园卡帮助` — 查看帮助\n\n"
+            "**【首次使用】**\n"
+            "1. 私聊发送：`#设置校园卡账号 学号 密码`\n"
+            "2. 如需校正电费缴费，设置记录宿舍后再发送：`#电费 记录 绑定`\n\n"
+            "**【换协议迁移】**\n"
+            "从旧协议更换为 QQ 官方机器人后，发送 `#迁移旧数据 你的旧QQ号` "
+            "迁移原账号与记录宿舍。",
+        )
     )
+
+
+@campus_card_migrate.handle()
+async def handle_campus_card_migrate(
+    bot: Bot, event: Event, args: Message = CommandArg()
+):
+    """迁移旧协议（QQ 号）名下的账号与订阅到当前 openid"""
+    old_qq = args.extract_plain_text().strip()
+    if not old_qq:
+        await campus_card_migrate.finish(
+            build_reply(
+                bot,
+                "**迁移旧数据**\n格式：`#迁移旧数据 你的旧QQ号`\n"
+                "将旧协议下该 QQ 号的校园卡账号与记录宿舍迁移到当前账号。",
+            )
+        )
+
+    result = await asyncio.to_thread(migrate_legacy_user, event.get_user_id(), old_qq)
+    if result == "migrated":
+        await campus_card_migrate.finish(
+            build_reply(
+                bot,
+                f"已把 QQ 号 `{old_qq}` 名下的校园卡账号与记录宿舍迁移到当前账号。\n"
+                "如需缴费流水校正，请再发送 `#电费 记录 绑定`。",
+            )
+        )
+    await campus_card_migrate.finish(build_reply(bot, _MIGRATE_MESSAGES[result]))

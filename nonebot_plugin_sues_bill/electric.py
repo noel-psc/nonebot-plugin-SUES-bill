@@ -9,6 +9,7 @@ from nonebot import logger, require, get_driver, on_command, get_plugin_config
 from nonebot.params import CommandArg
 from nonebot.adapters import Bot, Event, Message
 
+from .compat import build_reply
 from .config import USER_AGENT, REQUEST_TIMEOUT, ELECTRIC_QUERY_PATH, Config
 from .models import (
     get_scheduled_rooms,
@@ -331,13 +332,13 @@ async def settle_daily_electricity() -> None:
 
 def record_help() -> str:
     return (
-        "电费记录命令\n\n"
-        "#电费 记录 区域 楼栋 房间号\n"
-        "#电费 统计 0（今日截至当前估算）\n"
-        "#电费 统计 [天数]（已结束自然日）\n"
-        "#电费 记录 状态 / 停止\n"
-        "#电费 记录 绑定 / 解绑\n"
-        "#电费 管理 - 管理员手动录入"
+        "**电费记录命令**\n\n"
+        "- `#电费 记录 区域 楼栋 房间号`\n"
+        "- `#电费 统计 0`（今日截至当前估算）\n"
+        "- `#电费 统计 [天数]`（已结束自然日）\n"
+        "- `#电费 记录 状态` / `#电费 记录 停止`\n"
+        "- `#电费 记录 绑定` / `#电费 记录 解绑`\n"
+        "- `#电费 管理` — 管理员手动录入"
     )
 
 
@@ -621,10 +622,10 @@ def parse_admin_entry(
 
 def admin_help() -> str:
     return (
-        "管理员电费录入命令\n\n"
-        "#电费 管理 读数 区域 楼栋 房间号 日期 [时间] 剩余电量\n"
-        "#电费 管理 缴费 区域 楼栋 房间号 日期 [时间] 金额\n"
-        "日期格式：YYYY-MM-DD；时间可省略，默认为 00:00。"
+        "**管理员电费录入命令**\n\n"
+        "- `#电费 管理 读数 区域 楼栋 房间号 日期 [时间] 剩余电量`\n"
+        "- `#电费 管理 缴费 区域 楼栋 房间号 日期 [时间] 金额`\n"
+        "日期格式：`YYYY-MM-DD`；时间可省略，默认为 `00:00`。"
     )
 
 
@@ -694,7 +695,7 @@ async def handle_admin_command(user_id: str, arguments: str) -> str:
 async def show_statistics(user_id: str, days: int) -> str:
     subscription = await asyncio.to_thread(get_room_subscription, user_id)
     if subscription is None:
-        return "未设置记录宿舍，请先发送：#电费 记录 三期 21 1001"
+        return "未设置记录宿舍，请先发送：`#电费 记录 三期 21 1001`"
     has_bound_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
     if days == 0:
         correction_tip = account_correction_tip(has_bound_account)
@@ -728,9 +729,9 @@ async def show_statistics(user_id: str, days: int) -> str:
                 f"检测到余额增加，今日可能已缴费。\n{correction_tip}"
             )
         return (
-            f"{describe_room(subscription)}今日截至当前耗电（估算）\n"
-            f"耗电：{estimate['consumed_kwh']} 度\n"
-            f"电费：{estimate['cost_yuan']:.2f} 元\n"
+            f"**{describe_room(subscription)}今日截至当前耗电（估算）**\n"
+            f"- 耗电：{estimate['consumed_kwh']} 度\n"
+            f"- 电费：{estimate['cost_yuan']:.2f} 元\n"
             f"按今日首次和最新查询余额计算；缴费后可能不准确。\n{correction_tip}"
         )
     recalculated_days: int | None = None
@@ -765,12 +766,12 @@ async def show_statistics(user_id: str, days: int) -> str:
         f"未计入 {statistics['unavailable_days']} 天"
     )
     return (
-        f"{describe_room(subscription)}已记录"
-        f" {statistics['recorded_days']} 天耗电统计\n"
-        f"总耗电：{statistics['total_kwh']} 度\n"
-        f"总电费：{statistics['total_cost_yuan']:.2f} 元\n"
-        f"日均耗电：{average:.2f} 度（{statistics['valid_days']}天）\n"
-        f"最高耗电：{statistics['max_date']}，{statistics['max_kwh']} 度\n"
+        f"**{describe_room(subscription)}已记录"
+        f" {statistics['recorded_days']} 天耗电统计**\n"
+        f"- 总耗电：{statistics['total_kwh']} 度\n"
+        f"- 总电费：{statistics['total_cost_yuan']:.2f} 元\n"
+        f"- 日均耗电：{average:.2f} 度（{statistics['valid_days']}天）\n"
+        f"- 最高耗电：{statistics['max_date']}，{statistics['max_kwh']} 度\n"
         f"{status_summary}\n"
         f"{correction_tip}"
     )
@@ -785,28 +786,40 @@ async def handle_electric_query(
     if not arg_text:
         subscription = await asyncio.to_thread(get_room_subscription, user_id)
         if subscription is None:
-            await electric_query.finish("请先设置记录宿舍：#电费 记录 三期 21 1001")
+            await electric_query.finish(
+                build_reply(bot, "请先设置记录宿舍：`#电费 记录 三期 21 1001`")
+            )
         query_params = {
             key: str(subscription[key])
             for key in ("sysid", "roomid", "areaid", "buildid")
         }
     elif arg_text == "管理" or arg_text.startswith("管理 "):
         arguments = arg_text.removeprefix("管理").strip()
-        await electric_query.finish(await handle_admin_command(user_id, arguments))
+        await electric_query.finish(
+            build_reply(bot, await handle_admin_command(user_id, arguments))
+        )
     elif arg_text == "记录" or arg_text.startswith("记录 "):
         arguments = arg_text.removeprefix("记录").strip()
-        await electric_query.finish(await handle_record_command(user_id, arguments))
+        await electric_query.finish(
+            build_reply(bot, await handle_record_command(user_id, arguments))
+        )
     elif arg_text == "缴费" or arg_text.startswith("缴费 "):
         arguments = arg_text.removeprefix("缴费").strip()
-        await electric_query.finish(await handle_payment_command(user_id, arguments))
+        await electric_query.finish(
+            build_reply(bot, await handle_payment_command(user_id, arguments))
+        )
     elif (days := parse_statistics_days(arg_text)) is not None:
         if not 0 <= days <= MAX_STATISTICS_DAYS:
-            await electric_query.finish(f"统计天数应为 0 或 1 到 {MAX_STATISTICS_DAYS}")
-        await electric_query.finish(await show_statistics(user_id, days))
+            await electric_query.finish(
+                build_reply(bot, f"统计天数应为 0 或 1 到 {MAX_STATISTICS_DAYS}")
+            )
+        await electric_query.finish(
+            build_reply(bot, await show_statistics(user_id, days))
+        )
     else:
         query_params, error = parse_room_params(arg_text)
         if error:
-            await electric_query.finish(error)
+            await electric_query.finish(build_reply(bot, error))
     assert query_params is not None
     result = await query_electric_bill(**query_params)
     if result.get("retcode") == 0:
@@ -815,8 +828,12 @@ async def handle_electric_query(
             query_params,
             float(result["restElecDegree"]),
         )
-        await electric_query.finish(f"剩余电量: {result['restElecDegree']} 度")
-    await electric_query.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
+        await electric_query.finish(
+            build_reply(bot, f"剩余电量：**{result['restElecDegree']}** 度")
+        )
+    await electric_query.finish(
+        build_reply(bot, f"查询失败：{result.get('retmsg', '未知错误')}")
+    )
 
 
 @electric_raw.handle()
@@ -825,7 +842,9 @@ async def handle_electric_raw(
 ) -> None:
     parts = args.extract_plain_text().strip().split()
     if len(parts) < 4:
-        await electric_raw.finish("格式：#电费原始 sysid roomid areaid buildid")
+        await electric_raw.finish(
+            build_reply(bot, "格式：#电费原始 sysid roomid areaid buildid")
+        )
     result = await query_electric_bill(*parts[:4])
     if result.get("retcode") == 0:
         query_params: dict[str, str] = {
@@ -839,8 +858,12 @@ async def handle_electric_raw(
             query_params,
             float(result["restElecDegree"]),
         )
-        await electric_raw.finish(f"剩余电量: {result['restElecDegree']} 度")
-    await electric_raw.finish(f"查询失败: {result.get('retmsg', '未知错误')}")
+        await electric_raw.finish(
+            build_reply(bot, f"剩余电量：**{result['restElecDegree']}** 度")
+        )
+    await electric_raw.finish(
+        build_reply(bot, f"查询失败：{result.get('retmsg', '未知错误')}")
+    )
 
 
 @electric_help.handle()
@@ -848,14 +871,18 @@ async def handle_electric_help(
     bot: Bot, event: Event, args: Message = CommandArg()
 ) -> None:
     await electric_help.finish(
-        "电费查询帮助\n\n"
-        "#电费 - 查询记录宿舍当前余额\n"
-        "#电费 区域 楼栋 房间号 - 即时查询余额\n"
-        "#电费 缴费 区域 楼栋 房间号 金额 - 发起充值，回复确认后从校园卡余额扣款\n\n"
-        f"{record_help()}\n\n"
-        "定时日结在每日 00:00 执行；绑定账户后可用缴费流水校正历史及后续记录。\n"
-        "校正前提：该校园卡只给这一间宿舍缴费，且该宿舍只由这张卡缴费。\n"
-        "三期：10-26栋；四期：20、21、23、24、27-30、33-36、39-42栋"
+        build_reply(
+            bot,
+            "**电费查询帮助**\n\n"
+            "- `#电费` — 查询记录宿舍当前余额\n"
+            "- `#电费 区域 楼栋 房间号` — 即时查询余额\n"
+            "- `#电费 缴费 区域 楼栋 房间号 金额` — 发起充值，"
+            "回复确认后从校园卡余额扣款\n\n"
+            f"{record_help()}\n\n"
+            "定时日结在每日 `00:00` 执行；绑定账户后可用缴费流水校正历史及后续记录。\n"
+            "校正前提：该校园卡只给这一间宿舍缴费，且该宿舍只由这张卡缴费。\n"
+            "三期：10-26栋；四期：20、21、23、24、27-30、33-36、39-42栋",
+        )
     )
 
 
@@ -864,9 +891,12 @@ async def handle_electric_help_detail(
     bot: Bot, event: Event, args: Message = CommandArg()
 ) -> None:
     await electric_help_detail.finish(
-        "电费原始查询帮助\n\n"
-        "格式：#电费原始 系统ID 房间号 区域ID 楼栋ID\n"
-        "例：#电费原始 4 1001 101 13\n\n"
-        "系统ID：4 = 上海工程技术大学电控充值\n"
-        "区域ID：101 = 三期学生公寓，102 = 四期学生公寓"
+        build_reply(
+            bot,
+            "**电费原始查询帮助**\n\n"
+            "格式：`#电费原始 系统ID 房间号 区域ID 楼栋ID`\n"
+            "例：`#电费原始 4 1001 101 13`\n\n"
+            "系统ID：4 = 上海工程技术大学电控充值\n"
+            "区域ID：101 = 三期学生公寓，102 = 四期学生公寓",
+        )
     )

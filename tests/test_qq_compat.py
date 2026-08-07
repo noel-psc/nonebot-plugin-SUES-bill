@@ -1,7 +1,8 @@
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 from pydantic import create_model
+from nonebot.adapters import Bot
 
 
 def fake_qq_c2c_message_event(content: str = "#电费 三期 21 1001"):
@@ -99,3 +100,60 @@ async def test_qq_group_at_preprocessor_keeps_mention_only_message_intact():
     message = event.get_message()
     assert message.extract_plain_text() == ""
     assert isinstance(message, QQMessage)
+
+
+class _QQBot:
+    type = "QQ"
+
+
+class _OneBotBot:
+    type = "OneBot V11"
+
+
+def test_strip_markdown_lowers_to_plain_text():
+    from nonebot_plugin_sues_bill.compat import strip_markdown
+
+    text = (
+        "## 标题\n"
+        "---\n"
+        "- 项目一\n"
+        "1. 项目二\n"
+        "**加粗** `code` ~~删除~~\n"
+        "```\n"
+        "block\n"
+        "```\n"
+        "尾行"
+    )
+    assert strip_markdown(text) == "标题\n\n项目一\n项目二\n加粗 code 删除\nblock\n尾行"
+
+
+def test_rewrite_command_prefix_only_touches_commands():
+    from nonebot_plugin_sues_bill.compat import rewrite_command_prefix
+
+    text = "## 标题\n- `#电费 记录`\n#校园卡帮助\n参照 # 开头"
+    expected = "## 标题\n- `/电费 记录`\n/校园卡帮助\n参照 # 开头"
+    assert rewrite_command_prefix(text, "/") == expected
+
+
+def test_rewrite_command_prefix_keeps_hash_prefix():
+    from nonebot_plugin_sues_bill.compat import rewrite_command_prefix
+
+    text = "发送 `#电费` 查询"
+    assert rewrite_command_prefix(text, "#") == text
+
+
+def test_build_reply_uses_markdown_for_qq_bot():
+    from nonebot.adapters.qq import MessageSegment as QQMessageSegment
+
+    from nonebot_plugin_sues_bill.compat import build_reply
+
+    reply = build_reply(cast(Bot, _QQBot()), "**标题**\n- 项目")
+    assert isinstance(reply, QQMessageSegment)
+    assert reply.data["markdown"].content == "**标题**\n- 项目"
+
+
+def test_build_reply_lowers_to_plain_text_for_other_bots():
+    from nonebot_plugin_sues_bill.compat import build_reply
+
+    reply = build_reply(cast(Bot, _OneBotBot()), "**标题**\n- 项目")
+    assert reply == "标题\n项目"
