@@ -12,11 +12,11 @@ import ddddocr
 from nonebot import logger, on_command, get_plugin_config
 from Crypto.Cipher import DES
 from nonebot.params import CommandArg
-from nonebot.adapters import Message
+from nonebot.adapters import Bot, Event, Message
 from Crypto.Util.Padding import pad
 from cryptography.fernet import Fernet
-from nonebot.adapters.onebot.v11 import Bot, Event, PrivateMessageEvent
 
+from .compat import is_private_event
 from .config import (
     USER_AGENT,
     BILL_LOAD_PATH,
@@ -527,7 +527,7 @@ async def handle_campus_card_query(
 @campus_card_set.handle()
 async def handle_campus_card_set(bot: Bot, event: Event, args: Message = CommandArg()):
     """设置校园卡账号（仅私聊）"""
-    if not isinstance(event, PrivateMessageEvent):
+    if not is_private_event(event):
         await campus_card_set.finish("请私聊机器人设置账号")
 
     arg_text = args.extract_plain_text().strip()

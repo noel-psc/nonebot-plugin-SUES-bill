@@ -7,8 +7,7 @@ from collections.abc import Mapping, Iterable
 import httpx
 from nonebot import logger, require, get_driver, on_command, get_plugin_config
 from nonebot.params import CommandArg
-from nonebot.adapters import Message
-from nonebot.adapters.onebot.v11 import Bot, Event
+from nonebot.adapters import Bot, Event, Message
 
 from .config import USER_AGENT, REQUEST_TIMEOUT, ELECTRIC_QUERY_PATH, Config
 from .models import (

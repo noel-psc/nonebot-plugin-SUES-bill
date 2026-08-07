@@ -16,6 +16,11 @@ dependencies = [
   "httpx>=0.27.0",
 ]
 
+[project.optional-dependencies]
+qq = [
+  "nonebot-adapter-qq>=1.7.1,<2.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/noel-psc/nonebot-plugin-sues-bill"
 Issues = "https://github.com/noel-psc/nonebot-plugin-sues-bill/issues"
@@ -32,6 +37,7 @@ dev = [
 test = [
   "nonebot2[fastapi]>=2.4.2,<3.0.0",
   "nonebug>=0.3.7,<1.0.0",
+  "nonebot-adapter-qq>=1.7.1,<2.0.0",
   "pytest-asyncio>=1.3.0,<1.4.0",
   "pytest-cov>=7.0.0",
   "pytest-xdist>=3.8.0,<4.0.0",

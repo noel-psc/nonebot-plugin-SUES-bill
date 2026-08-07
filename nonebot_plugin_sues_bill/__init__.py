@@ -9,8 +9,8 @@ __plugin_meta__ = PluginMetadata(
     type="application",
     homepage="https://github.com/noel-psc/nonebot-plugin-sues-bill",
     config=Config,
-    supported_adapters={"~onebot.v11"},
+    supported_adapters={"~onebot.v11", "~qq"},
 )
 
-# 导入各模块以注册命令
-from . import electric, campus_card  # noqa: F401
+# 导入各模块以注册命令与跨适配器预处理
+from . import compat, electric, campus_card  # noqa: F401

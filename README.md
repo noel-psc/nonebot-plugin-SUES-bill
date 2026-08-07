@@ -77,6 +77,27 @@ SUES 校园服务插件，支持查询上海工程技术大学电费和校园卡
 </details>
 
 <details>
+<summary>QQ 官方机器人支持</summary>
+
+本插件同时支持 **OneBot V11** 与 **QQ 官方机器人**（`nonebot-adapter-qq`）两种协议。
+
+安装 QQ 官方适配器即可在 QQ 开放平台的机器人上使用：
+
+    uv add nonebot-plugin-sues-bill[qq]
+
+或在使用 pypi 源时：
+
+    nb plugin install "nonebot-plugin-sues-bill[qq]" --upgrade
+
+使用注意事项：
+
+- **私聊**（C2C）：与 OneBot 私聊行为一致，`#设置校园卡账号` 等命令正常可用。
+- **群聊**：公域群机器人需先 @ 机器人再发送命令（如 `@机器人 #电费 三期 21 1001`）；开启了「接收所有消息」的群机器人可直接发送命令。
+- 需要 `nonebot2>=2.5.0`（`nonebot-adapter-qq` 的最低要求）。
+
+</details>
+
+<details>
 <summary>使用 nbr 安装(使用 uv 管理依赖可用)</summary>
 
 [nbr](https://github.com/fllesser/nbr) 是一个基于 uv 的 nb-cli，可以方便地管理 nonebot2
