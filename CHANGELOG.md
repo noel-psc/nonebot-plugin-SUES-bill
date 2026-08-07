@@ -1,3 +1,11 @@
+## v1.2.0 (2026-08-04)
+
+### Feat
+
+- recharge electricity from the campus-card balance with a two-step confirmation
+- route synced bill payments to the owning room by order number
+- add daily usage settlement, payment-history calibration, and statistics
+
 ## v1.1.3 (2026-07-22)
 
 ### Fix
