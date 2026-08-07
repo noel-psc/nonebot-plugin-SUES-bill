@@ -68,7 +68,7 @@ def strip_markdown(text: str) -> str:
             continue
         line = re.sub(r"^\s{0,3}#{1,6}\s+", "", line)
         line = re.sub(r"^\s{0,3}>\s?", "", line)
-        if re.fullmatch(r"\s*-{3,}\s*", line):
+        if re.fullmatch(r"\s*(?:\*{3,}|-{3,})\s*", line):
             lines.append("")
             continue
         line = re.sub(r"^\s*[-*+]\s+", "", line)

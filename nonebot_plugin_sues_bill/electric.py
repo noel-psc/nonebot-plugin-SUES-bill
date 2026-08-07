@@ -333,12 +333,12 @@ async def settle_daily_electricity() -> None:
 def record_help() -> str:
     return (
         "**电费记录命令**\n\n"
-        "- `#电费 记录 区域 楼栋 房间号`\n"
-        "- `#电费 统计 0`（今日截至当前估算）\n"
-        "- `#电费 统计 [天数]`（已结束自然日）\n"
-        "- `#电费 记录 状态` / `#电费 记录 停止`\n"
-        "- `#电费 记录 绑定` / `#电费 记录 解绑`\n"
-        "- `#电费 管理` — 管理员手动录入"
+        "- **#电费 记录 区域 楼栋 房间号**\n"
+        "- **#电费 统计 0**（今日截至当前估算）\n"
+        "- **#电费 统计 [天数]**（已结束自然日）\n"
+        "- **#电费 记录 状态** / **#电费 记录 停止**\n"
+        "- **#电费 记录 绑定** / **#电费 记录 解绑**\n"
+        "- **#电费 管理** — 管理员手动录入"
     )
 
 
@@ -368,8 +368,8 @@ def account_correction_tip(
         )
     return (
         "账户校正：未绑定，缴费日可能不准确。\n"
-        "如需校正，请先私聊发送 #设置校园卡账号 学号 密码，"
-        "再发送 #电费 记录 绑定；校正前提是一卡一房、该卡仅为该房缴费。"
+        "如需校正，请先私聊发送 **#设置校园卡账号 学号 密码**，"
+        "再发送 **#电费 记录 绑定**；校正前提是一卡一房、该卡仅为该房缴费。"
     )
 
 
@@ -405,7 +405,7 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
         return (
             f"已设置记录宿舍：{describe_room(query_params)}\n"
             "每天 00:00 会查询并结算昨日耗电。\n"
-            "如需缴费日精确校正，请先私聊设置校园卡账号，再发送 #电费 记录 绑定。\n"
+            "如需缴费日精确校正，请先私聊设置校园卡账号，再发送 **#电费 记录 绑定**。\n"
             "校正前提：绑定卡仅为本宿舍缴费，且本宿舍仅由此卡缴费。"
         )
     if action == "状态":
@@ -434,8 +434,8 @@ async def handle_record_command(user_id: str, arguments: str) -> str:
                 "校正前提：该账户仅给此宿舍缴费，且此宿舍仅由该账户缴费。"
             )
         messages = {
-            "no_subscription": "请先设置记录宿舍：#电费 记录 三期 21 1001",
-            "no_account": "请先私聊设置校园卡账号：#设置校园卡账号 学号 密码",
+            "no_subscription": "请先设置记录宿舍：**#电费 记录 三期 21 1001**",
+            "no_account": "请先私聊设置校园卡账号：**#设置校园卡账号 学号 密码**",
             "room_bound": "该记录宿舍已绑定其他校园卡账户，请先由原账户解绑。",
         }
         return messages[result]
@@ -509,13 +509,16 @@ async def handle_payment_command(user_id: str, arguments: str) -> str:
     if action == "确认":
         pending = _get_pending_payment(user_id)
         if pending is None:
-            return "没有待确认的缴费，请先发送 #电费 缴费 区域 楼栋 房间号 金额"
+            return "没有待确认的缴费，请先发送 **#电费 缴费 区域 楼栋 房间号 金额**"
         return await execute_payment(user_id, pending)
     if action == "取消":
         _clear_pending_payment(user_id)
         return "已取消缴费。"
     if action and not arguments.replace("确认", "").replace("取消", "").strip():
-        return "格式：#电费 缴费 区域 楼栋 房间号 金额\n确认请回复 #电费 缴费 确认"
+        return (
+            "格式：**#电费 缴费 区域 楼栋 房间号 金额**\n"
+            "确认请回复 **#电费 缴费 确认**"
+        )
 
     query_params, amount, error = parse_payment_args(arguments)
     if error:
@@ -527,7 +530,7 @@ async def handle_payment_command(user_id: str, arguments: str) -> str:
     if not account:
         return (
             "尚未设置校园卡账号。\n"
-            "请先私聊发送 #设置校园卡账号 学号 密码，"
+            "请先私聊发送 **#设置校园卡账号 学号 密码**，"
             "缴费将从该校园卡余额中直接扣除。"
         )
 
@@ -535,7 +538,7 @@ async def handle_payment_command(user_id: str, arguments: str) -> str:
     return (
         f"即将为 {describe_room(query_params)} 充值 {amount:.2f} 元，"
         f"将从校园卡余额中扣除。\n"
-        f"回复 #电费 缴费 确认 完成支付，或 #电费 缴费 取消 放弃。"
+        f"回复 **#电费 缴费 确认** 完成支付，或 **#电费 缴费 取消** 放弃。"
         f"（5 分钟内有效）"
     )
 
@@ -551,7 +554,7 @@ async def execute_payment(user_id: str, pending: dict[str, object]) -> str:
         _clear_pending_payment(user_id)
         return (
             "尚未设置校园卡账号。\n"
-            "请先私聊发送 #设置校园卡账号 学号 密码，"
+            "请先私聊发送 **#设置校园卡账号 学号 密码**，"
             "缴费将从该校园卡余额中直接扣除。"
         )
 
@@ -602,7 +605,7 @@ def parse_admin_entry(
     if not parts or parts[0] not in {"读数", "缴费"}:
         return admin_help()
     if len(parts) not in {6, 7}:
-        return "格式：#电费 管理 读数/缴费 区域 楼栋 房间号 日期 [时间] 数值"
+        return "格式：**#电费 管理 读数/缴费 区域 楼栋 房间号 日期 [时间] 数值**"
     action = parts[0]
     query_params, error = parse_room_params(" ".join(parts[1:4]))
     if error:
@@ -623,9 +626,9 @@ def parse_admin_entry(
 def admin_help() -> str:
     return (
         "**管理员电费录入命令**\n\n"
-        "- `#电费 管理 读数 区域 楼栋 房间号 日期 [时间] 剩余电量`\n"
-        "- `#电费 管理 缴费 区域 楼栋 房间号 日期 [时间] 金额`\n"
-        "日期格式：`YYYY-MM-DD`；时间可省略，默认为 `00:00`。"
+        "- **#电费 管理 读数 区域 楼栋 房间号 日期 [时间] 剩余电量**\n"
+        "- **#电费 管理 缴费 区域 楼栋 房间号 日期 [时间] 金额**\n"
+        "日期格式：**YYYY-MM-DD**；时间可省略，默认为 **00:00**。"
     )
 
 
@@ -695,7 +698,7 @@ async def handle_admin_command(user_id: str, arguments: str) -> str:
 async def show_statistics(user_id: str, days: int) -> str:
     subscription = await asyncio.to_thread(get_room_subscription, user_id)
     if subscription is None:
-        return "未设置记录宿舍，请先发送：`#电费 记录 三期 21 1001`"
+        return "未设置记录宿舍，请先发送：**#电费 记录 三期 21 1001**"
     has_bound_account = await asyncio.to_thread(subscription_has_bound_account, user_id)
     if days == 0:
         correction_tip = account_correction_tip(has_bound_account)
@@ -787,7 +790,7 @@ async def handle_electric_query(
         subscription = await asyncio.to_thread(get_room_subscription, user_id)
         if subscription is None:
             await electric_query.finish(
-                build_reply(bot, "请先设置记录宿舍：`#电费 记录 三期 21 1001`")
+                build_reply(bot, "请先设置记录宿舍：**#电费 记录 三期 21 1001**")
             )
         query_params = {
             key: str(subscription[key])
@@ -874,12 +877,13 @@ async def handle_electric_help(
         build_reply(
             bot,
             "**电费查询帮助**\n\n"
-            "- `#电费` — 查询记录宿舍当前余额\n"
-            "- `#电费 区域 楼栋 房间号` — 即时查询余额\n"
-            "- `#电费 缴费 区域 楼栋 房间号 金额` — 发起充值，"
+            "- **#电费** — 查询记录宿舍当前余额\n"
+            "- **#电费 区域 楼栋 房间号** — 即时查询余额\n"
+            "- **#电费 缴费 区域 楼栋 房间号 金额** — 发起充值，"
             "回复确认后从校园卡余额扣款\n\n"
             f"{record_help()}\n\n"
-            "定时日结在每日 `00:00` 执行；绑定账户后可用缴费流水校正历史及后续记录。\n"
+            "定时日结在每日 **00:00** 执行；绑定账户后可用缴费流水校正历史"
+            "及后续记录。\n"
             "校正前提：该校园卡只给这一间宿舍缴费，且该宿舍只由这张卡缴费。\n"
             "三期：10-26栋；四期：20、21、23、24、27-30、33-36、39-42栋",
         )
@@ -894,8 +898,8 @@ async def handle_electric_help_detail(
         build_reply(
             bot,
             "**电费原始查询帮助**\n\n"
-            "格式：`#电费原始 系统ID 房间号 区域ID 楼栋ID`\n"
-            "例：`#电费原始 4 1001 101 13`\n\n"
+            "格式：**#电费原始 系统ID 房间号 区域ID 楼栋ID**\n"
+            "例：**#电费原始 4 1001 101 13**\n\n"
             "系统ID：4 = 上海工程技术大学电控充值\n"
             "区域ID：101 = 三期学生公寓，102 = 四期学生公寓",
         )
