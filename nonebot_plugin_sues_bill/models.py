@@ -493,7 +493,10 @@ def subscription_has_bound_account(user_id: str) -> bool:
 
 
 def migrate_legacy_user(new_user_id: str, old_user_id: str) -> str:
-    """把旧协议下某 QQ 号名下的账号与订阅迁移到当前用户。
+    """把旧协议下某 QQ 号名下的数据迁移到当前用户。
+
+    - 校园卡账号**移动**给当前用户（一个学号只能归属一个用户）
+    - 记录宿舍在旧 QQ 号**保留一份副本**，当前用户也获得同一宿舍的订阅
 
     ``old_user_id`` 为旧协议（OneBot）记录的 QQ 号，``new_user_id`` 为
     新协议下的 openid。返回稳定的结果代码：
@@ -502,7 +505,6 @@ def migrate_legacy_user(new_user_id: str, old_user_id: str) -> str:
     - ``invalid_old_id`` 旧 QQ 号格式不正确
     - ``no_data`` 旧 QQ 号名下没有可迁移数据
     - ``account_conflict`` 当前用户已设置校园卡账号
-    - ``subscription_conflict`` 当前用户已设置记录宿舍
     """
     initialize_database()
     old = str(old_user_id)
@@ -538,24 +540,29 @@ def migrate_legacy_user(new_user_id: str, old_user_id: str) -> str:
             is not None
         ):
             return "account_conflict"
-        if has_subscription and (
-            connection.execute(
-                "SELECT 1 FROM room_subscriptions WHERE user_id = ?", (new,)
-            ).fetchone()
-            is not None
-        ):
-            return "subscription_conflict"
         _ensure_user(connection, new)
         if has_account:
             connection.execute(
                 "UPDATE campus_accounts SET user_id = ? WHERE user_id = ?", (new, old)
             )
         if has_subscription:
-            connection.execute(
-                "UPDATE room_subscriptions SET user_id = ? WHERE user_id = ?",
-                (new, old),
+            new_has_subscription = (
+                connection.execute(
+                    "SELECT 1 FROM room_subscriptions WHERE user_id = ?", (new,)
+                ).fetchone()
+                is not None
             )
-        connection.execute("DELETE FROM bot_users WHERE user_id = ?", (old,))
+            if not new_has_subscription:
+                connection.execute(
+                    """
+                    INSERT INTO room_subscriptions(user_id, room_id, enabled)
+                    SELECT ?, room_id, enabled
+                    FROM room_subscriptions WHERE user_id = ?
+                    """,
+                    (new, old),
+                )
+        if not has_subscription:
+            connection.execute("DELETE FROM bot_users WHERE user_id = ?", (old,))
     return "migrated"
 
 

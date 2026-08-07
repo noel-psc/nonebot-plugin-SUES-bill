@@ -21,7 +21,9 @@ def _fresh_models(monkeypatch, tmp_path):
     return models
 
 
-def test_migrate_legacy_user_moves_account_and_subscription(monkeypatch, tmp_path):
+def test_migrate_legacy_user_moves_account_and_copies_subscription(
+    monkeypatch, tmp_path
+):
     models = _fresh_models(monkeypatch, tmp_path)
     models.set_room_subscription("2943185485", QUERY_PARAMS)
     models.save_campus_card_account("2943185485", "028125142", "encrypted")
@@ -36,7 +38,9 @@ def test_migrate_legacy_user_moves_account_and_subscription(monkeypatch, tmp_pat
         "username": "028125142",
         "password": "encrypted",
     }
-    assert models.get_room_subscription("2943185485", include_disabled=True) is None
+    old_subscription = models.get_room_subscription("2943185485")
+    assert old_subscription is not None
+    assert old_subscription["roomid"] == "1001"
     assert models.load_campus_card_account("2943185485") == {}
 
 
@@ -61,12 +65,17 @@ def test_migrate_legacy_user_rejects_account_conflict(monkeypatch, tmp_path):
     assert models.load_campus_card_account("1000000001") != {}
 
 
-def test_migrate_legacy_user_rejects_subscription_conflict(monkeypatch, tmp_path):
+def test_migrate_keeps_both_subscriptions_when_new_user_has_one(monkeypatch, tmp_path):
     models = _fresh_models(monkeypatch, tmp_path)
     models.set_room_subscription("1000000001", QUERY_PARAMS)
     models.set_room_subscription("openid-new", OTHER_QUERY_PARAMS)
 
     result = models.migrate_legacy_user("openid-new", "1000000001")
 
-    assert result == "subscription_conflict"
-    assert models.get_room_subscription("openid-new") is not None
+    assert result == "migrated"
+    new_subscription = models.get_room_subscription("openid-new")
+    old_subscription = models.get_room_subscription("1000000001")
+    assert new_subscription is not None
+    assert old_subscription is not None
+    assert new_subscription["roomid"] == "1002"
+    assert old_subscription["roomid"] == "1001"

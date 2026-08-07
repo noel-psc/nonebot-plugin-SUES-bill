@@ -500,9 +500,6 @@ _MIGRATE_MESSAGES = {
     "invalid_old_id": "QQ 号格式不正确，应为纯数字。",
     "no_data": "未找到该 QQ 号的旧记录，请确认填写的是旧协议下的 QQ 号。",
     "account_conflict": "当前账号已设置过校园卡账号，无法迁移。",
-    "subscription_conflict": (
-        "当前账号已设置记录宿舍，请先发送 **#电费 记录 停止** 后再迁移。"
-    ),
 }
 
 
@@ -639,7 +636,9 @@ async def handle_campus_card_migrate(
         await campus_card_migrate.finish(
             build_reply(
                 bot,
-                f"已把 QQ 号 **{old_qq}** 名下的校园卡账号与记录宿舍迁移到当前账号。\n"
+                f"已把 QQ 号 **{old_qq}** 名下的数据迁移到当前账号：\n"
+                "- 校园卡账号已迁到当前账号\n"
+                f"- 记录宿舍已在 **{old_qq}** 保留副本，两边均可查询\n\n"
                 "如需缴费流水校正，请再发送 **#电费 记录 绑定**。",
             )
         )
